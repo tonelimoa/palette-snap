@@ -147,6 +147,8 @@
     <p class="hint">クリックで各色をパレットに入れる/外す(緑チェック=使用中)。</p>
     <div class="row" style="margin-bottom:10px;">
       <button id="extractBtn" disabled>画像から抽出しなおす</button>
+      <button id="savePaletteBtn">パレットを保存</button>
+      <button id="loadPaletteBtn">パレットを読み込み</button>
     </div>
     <div class="candidate-grid" id="candidateGrid"></div>
   </div>
@@ -176,6 +178,14 @@
         </div>
         <div class="empty-msg" id="outEmpty">サイズを選ぶと変換されます</div>
       </div>
+    </div>
+    <div class="row" style="padding: 0 16px 16px; gap:10px;">
+      <span style="font-size:11px; color:var(--ink-dim);">拡大</span>
+      <button id="zoomOutBtn" style="padding:6px 10px;">－</button>
+      <input type="range" id="zoomSlider" min="2" max="60" value="12" style="flex:1; accent-color:var(--accent);">
+      <button id="zoomInBtn" style="padding:6px 10px;">＋</button>
+      <span id="zoomLabel" style="font-size:11px; color:var(--ink-dim); width:40px;">12x</span>
+      <button id="zoomResetBtn" style="padding:6px 10px;">自動</button>
     </div>
   </div>
 
@@ -221,7 +231,14 @@
   const drop = document.getElementById('drop');
   const filenameEl = document.getElementById('filename');
   const extractBtn = document.getElementById('extractBtn');
+  const savePaletteBtn = document.getElementById('savePaletteBtn');
+  const loadPaletteBtn = document.getElementById('loadPaletteBtn');
   const candidateGrid = document.getElementById('candidateGrid');
+  const zoomSlider = document.getElementById('zoomSlider');
+  const zoomLabel = document.getElementById('zoomLabel');
+  const zoomOutBtn = document.getElementById('zoomOutBtn');
+  const zoomInBtn = document.getElementById('zoomInBtn');
+  const zoomResetBtn = document.getElementById('zoomResetBtn');
   const sizeBtns = document.querySelectorAll('#sizeBtns button');
   const brushRowEl = document.getElementById('brushRow');
   const undoBtn = document.getElementById('undoBtn');
@@ -331,6 +348,57 @@
   }
   extractBtn.addEventListener('click', runExtract);
 
+  const PALETTE_KEY = 'dotconverter_palette';
+
+  function applyLoadedPalette(jsonStr){
+    const arr = JSON.parse(jsonStr);
+    if(!Array.isArray(arr) || !arr.length) throw new Error('invalid palette data');
+    palette = arr.filter(h => /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(h));
+    renderCandidateGrid();
+    renderBrushRow();
+    updateSizeBtnsEnabled();
+    statusLine.textContent = 'パレットを読み込みました(' + palette.length + '色)';
+  }
+
+  savePaletteBtn.addEventListener('click', async ()=>{
+    if(!palette.length){ alert('保存するパレットがありません。'); return; }
+    const data = JSON.stringify(palette);
+    try{
+      if(window.storage){
+        const res = await window.storage.set(PALETTE_KEY, data, false);
+        if(!res) throw new Error('storage.set returned no result');
+        statusLine.textContent = 'パレットを保存しました(' + palette.length + '色)';
+      } else if(window.localStorage){
+        localStorage.setItem(PALETTE_KEY, data);
+        statusLine.textContent = 'パレットを保存しました(ブラウザに保存・' + palette.length + '色)';
+      } else {
+        alert('この環境では保存機能が使えません。');
+      }
+    } catch(e){
+      alert('保存に失敗しました。');
+    }
+  });
+
+  loadPaletteBtn.addEventListener('click', async ()=>{
+    try{
+      let data = null;
+      if(window.storage){
+        try{
+          const res = await window.storage.get(PALETTE_KEY, false);
+          data = res ? res.value : null;
+        } catch(e){
+          data = null; // key not found yet
+        }
+      } else if(window.localStorage){
+        data = localStorage.getItem(PALETTE_KEY);
+      }
+      if(!data){ alert('保存されたパレットが見つかりません。'); return; }
+      applyLoadedPalette(data);
+    } catch(e){
+      alert('読み込みに失敗しました。保存データが壊れている可能性があります。');
+    }
+  });
+
   function renderCandidateGrid(){
     candidateGrid.innerHTML = '';
     const paletteSet = new Set(palette.map(normHex));
@@ -417,6 +485,19 @@
     return Math.max(4, Math.min(40, Math.round(384 / size)));
   }
 
+  function applyZoom(z){
+    if(!editImageData) return;
+    currentZoom = Math.max(2, Math.min(60, z));
+    zoomSlider.value = currentZoom;
+    zoomLabel.textContent = currentZoom + 'x';
+    drawScaledImage(outCanvas, editImageData, currentZoom);
+    drawGrid(outGridCanvas, currentSize, currentSize, currentZoom);
+  }
+  zoomSlider.addEventListener('input', (e)=> applyZoom(parseInt(e.target.value, 10)));
+  zoomOutBtn.addEventListener('click', ()=> applyZoom(currentZoom - 2));
+  zoomInBtn.addEventListener('click', ()=> applyZoom(currentZoom + 2));
+  zoomResetBtn.addEventListener('click', ()=> applyZoom(zoomFor(currentSize)));
+
   function convert(size){
     if(!loadedImage || !palette.length) return;
     const resized = document.createElement('canvas');
@@ -444,6 +525,8 @@
 
     editImageData = raw;
     currentZoom = zoomFor(size);
+    zoomSlider.value = currentZoom;
+    zoomLabel.textContent = currentZoom + 'x';
     drawScaledImage(outCanvas, editImageData, currentZoom);
     drawGrid(outGridCanvas, size, size, currentZoom);
     outEmpty.style.display = 'none';
