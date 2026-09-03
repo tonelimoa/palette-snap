@@ -29,7 +29,7 @@
       radial-gradient(circle at 10% 0%, rgba(242,98,5,0.10), transparent 40%),
       radial-gradient(circle at 90% 100%, rgba(26,38,91,0.35), transparent 45%);
   }
-  .wrap{ max-width: 980px; margin: 0 auto; padding: 28px 20px 60px; }
+  .wrap{ max-width: 980px; margin: 0 auto; padding: 28px 20px 160px; }
 
   header{ margin-bottom: 22px; }
   .kicker{ color: var(--accent-2); letter-spacing: 0.02em; font-size: 12px; margin: 0 0 6px; }
@@ -101,13 +101,27 @@
   .cv-inner{ position: relative; max-width: 100%; }
   canvas{ image-rendering: pixelated; display:block; max-width: 100%; height: auto; }
   .cv-inner canvas.overlay{ position:absolute; top:0; left:0; pointer-events:none; }
-  .cv-inner canvas.paintable{ cursor: crosshair; touch-action: none; }
 
-  .empty-msg{ color: var(--ink-dim); font-size: 12px; text-align:center; padding: 40px 10px; }
+  /* the editable dot-art viewport: fixed square window, pinch/pan happens only inside it */
+  #editViewport{
+    aspect-ratio: 1 / 1;
+    min-height: 0;
+    touch-action: none;
+  }
+  #outTransformWrap{
+    position: absolute;
+    top: 0; left: 0;
+    transform-origin: 0 0;
+    cursor: crosshair;
+  }
+  #outTransformWrap canvas{ max-width: none; height: auto; }
+  #outTransformWrap canvas.overlay{ position:absolute; top:0; left:0; pointer-events:none; }
+
+  .empty-msg{ color: var(--ink-dim); font-size: 12px; text-align:center; padding: 40px 10px; z-index: 2; }
 
   /* ---- palette / brush ---- */
-  .brush-row{ display:flex; flex-wrap:wrap; gap: 6px; margin-bottom: 4px; }
-  .brush{ width: 28px; height: 28px; border: 2px solid var(--line); cursor:pointer; }
+  .brush-row{ display:flex; flex-wrap:wrap; gap: 6px; }
+  .brush{ width: 26px; height: 26px; border: 2px solid var(--line); cursor:pointer; flex-shrink:0; }
   .brush.selected{ border-color: var(--accent-2); box-shadow: 0 0 0 2px rgba(247,167,8,0.35); }
   .brush.eraser{
     display:flex; align-items:center; justify-content:center; background: var(--panel-2);
@@ -116,6 +130,18 @@
   .brush.eraser.selected{ color: var(--accent-2); }
 
   .status-line{ font-size: 11px; color: var(--ink-dim); margin-top: 10px; }
+
+  /* ---- fixed bottom bar: palette + undo/redo ---- */
+  .bottom-bar{
+    position: fixed; left:0; right:0; bottom:0; z-index: 50;
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px));
+    display:flex; align-items:center; gap:10px;
+  }
+  .bottom-bar .brush-row{ flex:1; min-width:0; }
+  .bottom-bar-actions{ display:flex; gap:8px; flex-shrink:0; }
+  .bottom-bar-actions button{ font-size:16px; padding:8px 14px; line-height:1; }
 
   footer{
     margin-top: 30px; font-size: 11px; color: var(--ink-dim); line-height: 1.8;
@@ -129,7 +155,7 @@
   <header>
     <p class="kicker">DOT CONVERTER</p>
     <h1>特徴色15色を抽出してドット絵に変換・編集</h1>
-    <p class="sub">画像から特徴的な15色を自動抽出し、その色だけでドット絵(8×8〜64×64)に変換します。あとはドラッグで連続的に塗り直せます。</p>
+    <p class="sub">画像から特徴的な15色を自動抽出し、その色だけでドット絵(8×8〜64×64)に変換します。編集エリアは1本指で塗る、2本指でズーム/移動です。</p>
   </header>
 
   <div class="panel">
@@ -170,49 +196,51 @@
         <div class="cv-inner"><canvas id="cvOrig"></canvas></div>
         <div class="empty-msg" id="origEmpty">画像を読み込むとここに表示されます</div>
       </div>
-      <div class="cv-box">
-        <span class="tag">ドット絵(ドラッグで編集)</span>
-        <div class="cv-inner">
+      <div class="cv-box" id="editViewport">
+        <span class="tag">ドット絵(1本指=塗る/2本指=ズーム・移動)</span>
+        <div id="outTransformWrap">
           <canvas id="cvOut"></canvas>
           <canvas id="cvOutGrid" class="overlay"></canvas>
         </div>
         <div class="empty-msg" id="outEmpty">サイズを選ぶと変換されます</div>
       </div>
     </div>
-    <div class="row" style="padding: 0 16px 16px; gap:10px;">
-      <span style="font-size:11px; color:var(--ink-dim);">拡大</span>
-      <button id="zoomOutBtn" style="padding:6px 10px;">－</button>
-      <input type="range" id="zoomSlider" min="2" max="60" value="12" style="flex:1; accent-color:var(--accent);">
-      <button id="zoomInBtn" style="padding:6px 10px;">＋</button>
-      <span id="zoomLabel" style="font-size:11px; color:var(--ink-dim); width:40px;">12x</span>
-      <button id="zoomResetBtn" style="padding:6px 10px;">自動</button>
-    </div>
   </div>
 
   <div class="panel">
     <h2>4. 編集</h2>
-    <p class="hint">下の色をクリックして選び、右上のドット絵をクリック/ドラッグで塗ります。</p>
-    <div class="brush-row" id="brushRow"></div>
-    <div class="row" style="margin-top:10px;">
-      <button id="undoBtn" disabled>← 戻す</button>
-      <button id="redoBtn" disabled>進む →</button>
+    <p class="hint">下(画面下部固定)の色をタップして選び、ドット絵側を1本指でタップ/ドラッグで塗ります。2本指のピンチ/ドラッグで拡大・移動。</p>
+    <div class="row">
       <button id="downloadBtn" disabled>PNGをダウンロード</button>
     </div>
     <div class="status-line" id="statusLine">画像未読み込み</div>
   </div>
 
+  <div class="panel">
+    <h2>5. 絵全体を移動(保存されるPNGの中身がズレます)</h2>
+    <p class="hint">ドット絵エリアを<strong>3本指</strong>でドラッグすると、絵そのものが平行移動します(表示のパンではなく、実際のピクセルデータが動きます)。はみ出た部分は透明になります。</p>
+  </div>
+
   <footer>
     抽出: 出現頻度が高く、互いに離れた色を優先して15色ピックアップしています。<br>
     変換: ニアレストネイバー(補間なし)でサイズ変更した直後に、各ドットを抽出した15色のうち一番近い色へスナップします。<br>
-    編集: ドラッグ中は描画のみを高速に更新し、ストローク単位(クリックしてから離すまで)で戻す/進むが可能です。
+    編集: ドラッグ中は変更セルだけを高速に塗り替えます。ストローク単位で戻す/進むが可能です。パレットの保存/読み込みはこのツール内(またはブラウザ)に保持されます。
   </footer>
+</div>
+
+<div class="bottom-bar">
+  <div class="brush-row" id="brushRow"></div>
+  <div class="bottom-bar-actions">
+    <button id="undoBtn" disabled title="戻す">←</button>
+    <button id="redoBtn" disabled title="進む">→</button>
+  </div>
 </div>
 
 <script>
 (function(){
   let loadedImage = null;
   let currentSize = 32;
-  let currentZoom = 12;
+  let currentZoom = 12;   // native draw resolution factor (fixed per size; NOT the pinch scale)
   let editImageData = null;
   let candidateColors = []; // [{r,g,b,pct}]
   let palette = [];         // hex strings currently "added"
@@ -222,9 +250,19 @@
   let undoStack = []; // ImageData snapshots (state before a stroke)
   let redoStack = [];
 
+  // pinch/pan (pure CSS transform layer, independent of currentZoom)
+  let pinchScale = 1;
+  let panX = 0, panY = 0;
+  let pinchGesture = null;
+  let shiftGesture = null;
+  let activeTouchMode = null; // null | 'paint' | 'pinch' | 'shift'
+  const MIN_SCALE = 0.5, MAX_SCALE = 8;
+
   const origCanvas = document.getElementById('cvOrig');
   const outCanvas = document.getElementById('cvOut');
   const outGridCanvas = document.getElementById('cvOutGrid');
+  const editViewport = document.getElementById('editViewport');
+  const outTransformWrap = document.getElementById('outTransformWrap');
   const origEmpty = document.getElementById('origEmpty');
   const outEmpty = document.getElementById('outEmpty');
   const fileInput = document.getElementById('fileInput');
@@ -234,11 +272,6 @@
   const savePaletteBtn = document.getElementById('savePaletteBtn');
   const loadPaletteBtn = document.getElementById('loadPaletteBtn');
   const candidateGrid = document.getElementById('candidateGrid');
-  const zoomSlider = document.getElementById('zoomSlider');
-  const zoomLabel = document.getElementById('zoomLabel');
-  const zoomOutBtn = document.getElementById('zoomOutBtn');
-  const zoomInBtn = document.getElementById('zoomInBtn');
-  const zoomResetBtn = document.getElementById('zoomResetBtn');
   const sizeBtns = document.querySelectorAll('#sizeBtns button');
   const brushRowEl = document.getElementById('brushRow');
   const undoBtn = document.getElementById('undoBtn');
@@ -257,9 +290,11 @@
   }
   function normHex(h){ return h.toLowerCase(); }
 
-  // The image canvas and the grid canvas are both sized at the SAME resolution
-  // (native size * zoom) with no separate CSS scaling trick on either -- this is
-  // what guarantees the grid lines and the pixel cells can never drift apart.
+  // Image canvas + grid canvas are always drawn at the SAME native resolution
+  // (size * currentZoom) with no independent CSS scaling on either -- this is
+  // what keeps the grid lines and the pixel cells from ever drifting apart.
+  // All zooming/panning for viewing is layered on top via a single CSS
+  // transform on their shared parent (#outTransformWrap).
   function drawScaledImage(canvas, imageData, zoom){
     const w = imageData.width, h = imageData.height;
     canvas.width = w * zoom;
@@ -278,7 +313,7 @@
     canvas.height = h * zoom;
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if(zoom < 4) return; // too dense to be useful
+    if(zoom < 4) return;
     ctx.strokeStyle = 'rgba(140,130,180,0.4)';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -295,6 +330,55 @@
 
   function cloneImageData(imgData){
     return new ImageData(new Uint8ClampedArray(imgData.data), imgData.width, imgData.height);
+  }
+
+  // ---------------- pinch / pan (2-finger) ----------------
+  function applyTransform(){
+    outTransformWrap.style.transform = `translate(${panX}px, ${panY}px) scale(${pinchScale})`;
+  }
+
+  function centerContent(){
+    const vpRect = editViewport.getBoundingClientRect();
+    const contentW = currentSize * currentZoom;
+    const contentH = currentSize * currentZoom;
+    pinchScale = 1;
+    panX = (vpRect.width - contentW) / 2;
+    panY = (vpRect.height - contentH) / 2;
+    applyTransform();
+  }
+
+  function touchDistance(t1, t2){
+    const dx = t1.clientX - t2.clientX, dy = t1.clientY - t2.clientY;
+    return Math.sqrt(dx*dx + dy*dy);
+  }
+  function touchMidpoint(t1, t2){
+    return { x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 };
+  }
+
+  function beginPinch(t0, t1){
+    const rect = editViewport.getBoundingClientRect();
+    const mid = touchMidpoint(t0, t1);
+    pinchGesture = {
+      startDist: touchDistance(t0, t1),
+      startScale: pinchScale,
+      originLeft: rect.left,
+      originTop: rect.top,
+      // content-space point currently under the pinch midpoint -- kept fixed
+      // under the fingers as the gesture continues (standard pinch-zoom math)
+      P0x: (mid.x - rect.left - panX) / pinchScale,
+      P0y: (mid.y - rect.top - panY) / pinchScale,
+    };
+  }
+  function updatePinch(t0, t1){
+    if(!pinchGesture) return;
+    const dist = touchDistance(t0, t1);
+    let newScale = pinchGesture.startScale * (dist / pinchGesture.startDist);
+    newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, newScale));
+    const mid = touchMidpoint(t0, t1);
+    panX = (mid.x - pinchGesture.originLeft) - pinchGesture.P0x * newScale;
+    panY = (mid.y - pinchGesture.originTop) - pinchGesture.P0y * newScale;
+    pinchScale = newScale;
+    applyTransform();
   }
 
   // ---------------- extraction ----------------
@@ -341,7 +425,7 @@
     const raw = tctx.getImageData(0,0,tmp.width,tmp.height);
 
     candidateColors = extractDominantColors(raw, 15);
-    palette = candidateColors.map(c => rgbToHex(c.r,c.g,c.b)); // all added by default
+    palette = candidateColors.map(c => rgbToHex(c.r,c.g,c.b));
     renderCandidateGrid();
     renderBrushRow();
     updateSizeBtnsEnabled();
@@ -387,7 +471,7 @@
           const res = await window.storage.get(PALETTE_KEY, false);
           data = res ? res.value : null;
         } catch(e){
-          data = null; // key not found yet
+          data = null;
         }
       } else if(window.localStorage){
         data = localStorage.getItem(PALETTE_KEY);
@@ -454,7 +538,6 @@
         origEmpty.style.display = 'none';
 
         outCanvas.getContext('2d').clearRect(0,0,outCanvas.width,outCanvas.height);
-        outCanvas.classList.remove('paintable');
         outGridCanvas.getContext('2d').clearRect(0,0,outGridCanvas.width,outGridCanvas.height);
         outEmpty.style.display = 'block';
         editImageData = null;
@@ -485,19 +568,6 @@
     return Math.max(4, Math.min(40, Math.round(384 / size)));
   }
 
-  function applyZoom(z){
-    if(!editImageData) return;
-    currentZoom = Math.max(2, Math.min(60, z));
-    zoomSlider.value = currentZoom;
-    zoomLabel.textContent = currentZoom + 'x';
-    drawScaledImage(outCanvas, editImageData, currentZoom);
-    drawGrid(outGridCanvas, currentSize, currentSize, currentZoom);
-  }
-  zoomSlider.addEventListener('input', (e)=> applyZoom(parseInt(e.target.value, 10)));
-  zoomOutBtn.addEventListener('click', ()=> applyZoom(currentZoom - 2));
-  zoomInBtn.addEventListener('click', ()=> applyZoom(currentZoom + 2));
-  zoomResetBtn.addEventListener('click', ()=> applyZoom(zoomFor(currentSize)));
-
   function convert(size){
     if(!loadedImage || !palette.length) return;
     const resized = document.createElement('canvas');
@@ -525,12 +595,10 @@
 
     editImageData = raw;
     currentZoom = zoomFor(size);
-    zoomSlider.value = currentZoom;
-    zoomLabel.textContent = currentZoom + 'x';
     drawScaledImage(outCanvas, editImageData, currentZoom);
     drawGrid(outGridCanvas, size, size, currentZoom);
     outEmpty.style.display = 'none';
-    outCanvas.classList.add('paintable');
+    centerContent();
 
     undoStack = []; redoStack = [];
     undoBtn.disabled = true; redoBtn.disabled = true;
@@ -566,12 +634,11 @@
     brushRowEl.appendChild(eraserEl);
   }
 
-  // ---------------- continuous (drag) painting ----------------
+  // ---------------- painting (shared by mouse + 1-finger touch) ----------------
   function canvasToPixel(e, canvas, zoom){
-    // canvas.width/height equal (nativeSize * zoom) -- rect.width/height is only
-    // different from that if the responsive max-width kicked in, so this ratio
-    // still lands on the right cell either way. Divide once by zoom to get the
-    // native pixel index.
+    // getBoundingClientRect() reflects the canvas's FINAL on-screen box, including
+    // any ancestor CSS transform (pinch/pan) -- so this ratio-based conversion
+    // stays correct no matter how the content is currently zoomed/panned.
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
@@ -598,8 +665,8 @@
     } else {
       return;
     }
-    // Only repaint the single touched cell -- far cheaper than redrawing the
-    // whole canvas, and it stays in the exact same coordinate space as the grid.
+    // repaint only the touched cell -- cheap, and stays in the same coordinate
+    // space as the grid (no full-canvas redraw needed while dragging)
     const ctx = outCanvas.getContext('2d');
     if(eraserActive){
       ctx.clearRect(px*currentZoom, py*currentZoom, currentZoom, currentZoom);
@@ -610,9 +677,8 @@
     statusLine.textContent = `(${px}, ${py}) を塗りました`;
   }
 
-  function strokeStart(e){
+  function beginStroke(e){
     if(!editImageData) return;
-    e.preventDefault();
     undoStack.push(cloneImageData(editImageData));
     if(undoStack.length > 50) undoStack.shift();
     redoStack = [];
@@ -621,21 +687,108 @@
     isPainting = true;
     paintAt(e);
   }
-  function strokeMove(e){
-    if(!isPainting) return;
-    e.preventDefault();
-    paintAt(e);
+
+  // mouse (desktop) -- unaffected by pinch/pan, no gesture ambiguity
+  outCanvas.addEventListener('mousedown', (e)=>{ beginStroke(e); });
+  outCanvas.addEventListener('mousemove', (e)=>{ if(isPainting) paintAt(e); });
+  window.addEventListener('mouseup', ()=>{ isPainting = false; });
+
+  // touch: 1 finger = paint, 2 fingers = pinch-zoom + pan, 3 fingers = move the artwork itself
+  editViewport.addEventListener('touchstart', (e)=>{
+    if(e.touches.length >= 3){
+      e.preventDefault();
+      isPainting = false;
+      activeTouchMode = 'shift';
+      beginShiftGesture(e.touches);
+    } else if(e.touches.length === 2 && activeTouchMode !== 'shift'){
+      e.preventDefault();
+      isPainting = false;
+      activeTouchMode = 'pinch';
+      beginPinch(e.touches[0], e.touches[1]);
+    } else if(e.touches.length === 1 && activeTouchMode !== 'pinch' && activeTouchMode !== 'shift'){
+      if(!editImageData) return;
+      e.preventDefault();
+      activeTouchMode = 'paint';
+      beginStroke(e);
+    }
+  }, {passive:false});
+
+  editViewport.addEventListener('touchmove', (e)=>{
+    if(activeTouchMode === 'shift' && e.touches.length >= 3){
+      e.preventDefault();
+      updateShiftGesture(e.touches);
+    } else if(activeTouchMode === 'pinch' && e.touches.length >= 2){
+      e.preventDefault();
+      updatePinch(e.touches[0], e.touches[1]);
+    } else if(activeTouchMode === 'paint' && isPainting && e.touches.length === 1){
+      e.preventDefault();
+      paintAt(e);
+    }
+  }, {passive:false});
+
+  function endAllTouch(e){
+    if(!e.touches || e.touches.length === 0){
+      activeTouchMode = null;
+      isPainting = false;
+      pinchGesture = null;
+      shiftGesture = null;
+    }
+    // if fewer fingers remain mid-gesture, stay in the current mode until fully
+    // released so a lifted finger can't accidentally start a different gesture.
   }
-  function strokeEnd(){
-    isPainting = false;
+  window.addEventListener('touchend', endAllTouch);
+  window.addEventListener('touchcancel', endAllTouch);
+
+  function translateImageData(imgData, dx, dy){
+    const w = imgData.width, h = imgData.height;
+    const src = imgData.data;
+    const out = new Uint8ClampedArray(src.length); // defaults to all-zero = fully transparent
+    for(let y=0; y<h; y++){
+      for(let x=0; x<w; x++){
+        const sx = x - dx, sy = y - dy;
+        if(sx < 0 || sy < 0 || sx >= w || sy >= h) continue; // stays transparent
+        const si = (sy*w + sx) * 4, di = (y*w + x) * 4;
+        out[di]=src[si]; out[di+1]=src[si+1]; out[di+2]=src[si+2]; out[di+3]=src[si+3];
+      }
+    }
+    return new ImageData(out, w, h);
   }
 
-  outCanvas.addEventListener('mousedown', strokeStart);
-  outCanvas.addEventListener('mousemove', strokeMove);
-  window.addEventListener('mouseup', strokeEnd);
-  outCanvas.addEventListener('touchstart', strokeStart, {passive:false});
-  outCanvas.addEventListener('touchmove', strokeMove, {passive:false});
-  window.addEventListener('touchend', strokeEnd);
+  function touchCentroid(touches){
+    let sx = 0, sy = 0;
+    for(let i=0; i<touches.length; i++){ sx += touches[i].clientX; sy += touches[i].clientY; }
+    return { x: sx/touches.length, y: sy/touches.length };
+  }
+
+  function beginShiftGesture(touches){
+    if(!editImageData){ shiftGesture = null; return; }
+    undoStack.push(cloneImageData(editImageData));
+    if(undoStack.length > 50) undoStack.shift();
+    redoStack = [];
+    undoBtn.disabled = false;
+    redoBtn.disabled = true;
+    const c = touchCentroid(touches);
+    shiftGesture = { startX: c.x, startY: c.y, appliedDX: 0, appliedDY: 0, base: cloneImageData(editImageData) };
+    statusLine.textContent = '3本指で絵を移動中...';
+  }
+
+  function updateShiftGesture(touches){
+    if(!shiftGesture) return;
+    const c = touchCentroid(touches);
+    const screenDX = c.x - shiftGesture.startX;
+    const screenDY = c.y - shiftGesture.startY;
+    const scalePxPerNative = currentZoom * pinchScale; // on-screen px per native pixel, right now
+    const dx = Math.round(screenDX / scalePxPerNative);
+    const dy = Math.round(screenDY / scalePxPerNative);
+    if(dx !== shiftGesture.appliedDX || dy !== shiftGesture.appliedDY){
+      // always recompute from the gesture's starting snapshot, so rounding
+      // never compounds across many small moves
+      editImageData = translateImageData(shiftGesture.base, dx, dy);
+      drawScaledImage(outCanvas, editImageData, currentZoom);
+      shiftGesture.appliedDX = dx; shiftGesture.appliedDY = dy;
+      statusLine.textContent = `絵全体を (${dx}, ${dy}) 移動中`;
+    }
+  }
 
   undoBtn.addEventListener('click', ()=>{
     if(!undoStack.length || !editImageData) return;
@@ -663,6 +816,10 @@
     link.download = `dotart_${currentSize}x${currentSize}.png`;
     link.href = tmp.toDataURL('image/png');
     link.click();
+  });
+
+  window.addEventListener('resize', ()=>{
+    if(editImageData) centerContent();
   });
 })();
 </script>
