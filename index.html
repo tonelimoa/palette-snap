@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ドット絵コンバーター</title>
+<style>
+  :root{
+    --bg: #100e22;
+    --panel: #1c1a3a;
+    --panel-2: #241f4a;
+    --line: #372f68;
+    --ink: #f6e5d8;
+    --ink-dim: #b6acd6;
+    --accent: #f26205;
+    --accent-2: #f7a708;
+    --ok: #6ee6a0;
+    --danger: #e5504d;
+  }
+  * { box-sizing: border-box; }
+  html,body{
+    margin:0; padding:0; min-height:100%;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "SF Mono","Consolas","Menlo",monospace;
+  }
+  body{
+    background-image:
+      radial-gradient(circle at 10% 0%, rgba(242,98,5,0.10), transparent 40%),
+      radial-gradient(circle at 90% 100%, rgba(26,38,91,0.35), transparent 45%);
+  }
+  .wrap{ max-width: 980px; margin: 0 auto; padding: 28px 20px 60px; }
+
+  header{ margin-bottom: 22px; }
+  .kicker{ color: var(--accent-2); letter-spacing: 0.02em; font-size: 12px; margin: 0 0 6px; }
+  h1{ margin: 0 0 6px; font-size: 24px; line-height: 1.3; font-weight: 700; color: var(--ink); }
+  .sub{ color: var(--ink-dim); font-size: 13px; line-height: 1.7; max-width: 62ch; }
+
+  .panel{ background: var(--panel); border: 1px solid var(--line); padding: 16px; margin-top: 18px; }
+  .panel h2{
+    margin: 0 0 12px; font-size: 12px; letter-spacing: 0.04em; color: var(--ink-dim);
+    font-weight: 700; text-transform: uppercase; display:flex; align-items:center; gap:8px;
+  }
+  .panel h2::before{ content:""; width:6px; height:6px; background: var(--accent); display:inline-block; }
+  .panel p.hint{ font-size: 11px; color: var(--ink-dim); line-height:1.6; margin: 0 0 10px; }
+
+  /* ---- upload ---- */
+  .drop{
+    border: 1px dashed var(--line); background: var(--panel-2); padding: 20px 12px;
+    text-align:center; cursor: pointer; transition: border-color .15s ease, background .15s ease;
+  }
+  .drop:hover, .drop.drag{ border-color: var(--accent); background: #2a2456; }
+  .drop p{ margin: 6px 0 0; font-size: 12px; color: var(--ink-dim); }
+  .drop .big{ font-size: 22px; }
+  input[type=file]{ display:none; }
+  .filename{ margin-top: 10px; font-size: 11px; color: var(--ink-dim); word-break: break-all; }
+
+  button{
+    font-family: inherit; cursor:pointer; border: 1px solid var(--line); background: var(--panel-2);
+    color: var(--ink); padding: 9px 14px; font-size: 12px; letter-spacing: 0.02em;
+  }
+  button:hover{ border-color: var(--accent); color: var(--accent-2); }
+  button.active{ border-color: var(--accent); color: #1a0e05; background: var(--accent); font-weight:700; }
+  button:disabled{ opacity:0.35; cursor:not-allowed; }
+  button:disabled:hover{ border-color: var(--line); color: var(--ink); background: var(--panel-2); }
+
+  .row{ display:flex; gap:8px; align-items:center; flex-wrap: wrap; }
+  .size-btns button{ min-width: 70px; }
+
+  /* ---- candidate swatches (extracted colors == working palette) ---- */
+  .candidate-grid{ display:flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+  .candidate{ width: 40px; cursor:pointer; text-align:center; user-select:none; }
+  .candidate .cbox{ width: 40px; height: 32px; border: 2px solid var(--line); position:relative; opacity: 0.35; }
+  .candidate.added .cbox{ border-color: var(--ok); opacity: 1; }
+  .candidate .check{
+    position:absolute; top:2px; right:2px; font-size:10px; color:#0a0a0a;
+    background: var(--ok); width:14px; height:14px; display:none; align-items:center; justify-content:center; line-height:1;
+  }
+  .candidate.added .check{ display:flex; }
+  .candidate .pct{ font-size: 9px; color: var(--ink-dim); margin-top: 3px; }
+
+  /* ---- preview ---- */
+  .canvases{ display:grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 700px){ .canvases{ grid-template-columns: 1fr; } }
+  .cv-box{
+    background:
+      linear-gradient(45deg, #2a2650 25%, transparent 25%) 0 0/16px 16px,
+      linear-gradient(-45deg, #2a2650 25%, transparent 25%) 0 0/16px 16px,
+      linear-gradient(45deg, transparent 75%, #2a2650 75%) 0 0/16px 16px,
+      linear-gradient(-45deg, transparent 75%, #2a2650 75%) 0 0/16px 16px,
+      #1a1738;
+    border: 1px solid var(--line);
+    display:flex; align-items:center; justify-content:center;
+    min-height: 200px; overflow: hidden; position: relative;
+  }
+  .cv-box .tag{
+    position:absolute; top:0; left:0; z-index: 3; background: var(--panel); color: var(--ink-dim);
+    font-size: 10px; padding: 3px 8px; letter-spacing: 0.05em;
+    border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  }
+  .cv-inner{ position: relative; max-width: 100%; }
+  canvas{ image-rendering: pixelated; display:block; max-width: 100%; height: auto; }
+  .cv-inner canvas.overlay{ position:absolute; top:0; left:0; pointer-events:none; }
+  .cv-inner canvas.paintable{ cursor: crosshair; touch-action: none; }
+
+  .empty-msg{ color: var(--ink-dim); font-size: 12px; text-align:center; padding: 40px 10px; }
+
+  /* ---- palette / brush ---- */
+  .brush-row{ display:flex; flex-wrap:wrap; gap: 6px; margin-bottom: 4px; }
+  .brush{ width: 28px; height: 28px; border: 2px solid var(--line); cursor:pointer; }
+  .brush.selected{ border-color: var(--accent-2); box-shadow: 0 0 0 2px rgba(247,167,8,0.35); }
+  .brush.eraser{
+    display:flex; align-items:center; justify-content:center; background: var(--panel-2);
+    color: var(--ink-dim); font-size: 14px;
+  }
+  .brush.eraser.selected{ color: var(--accent-2); }
+
+  .status-line{ font-size: 11px; color: var(--ink-dim); margin-top: 10px; }
+
+  footer{
+    margin-top: 30px; font-size: 11px; color: var(--ink-dim); line-height: 1.8;
+    border-top: 1px solid var(--line); padding-top: 14px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <p class="kicker">DOT CONVERTER</p>
+    <h1>特徴色15色を抽出してドット絵に変換・編集</h1>
+    <p class="sub">画像から特徴的な15色を自動抽出し、その色だけでドット絵(8×8〜64×64)に変換します。あとはドラッグで連続的に塗り直せます。</p>
+  </header>
+
+  <div class="panel">
+    <h2>1. 画像を読み込む</h2>
+    <div class="drop" id="drop">
+      <div class="big">📁</div>
+      <p>クリックまたはドラッグ&ドロップ</p>
+    </div>
+    <input type="file" id="fileInput" accept="image/*">
+    <div class="filename" id="filename">未選択</div>
+  </div>
+
+  <div class="panel">
+    <h2>2. 特徴色を抽出(15色)</h2>
+    <p class="hint">クリックで各色をパレットに入れる/外す(緑チェック=使用中)。</p>
+    <div class="row" style="margin-bottom:10px;">
+      <button id="extractBtn" disabled>画像から抽出しなおす</button>
+    </div>
+    <div class="candidate-grid" id="candidateGrid"></div>
+  </div>
+
+  <div class="panel">
+    <h2>3. サイズを選んでドット絵に変換</h2>
+    <div class="row size-btns" id="sizeBtns">
+      <button data-size="8" disabled>8×8</button>
+      <button data-size="16" disabled>16×16</button>
+      <button data-size="32" disabled class="active">32×32</button>
+      <button data-size="64" disabled>64×64</button>
+    </div>
+  </div>
+
+  <div class="panel" style="padding:0; overflow:hidden;">
+    <div class="canvases" style="padding:16px;">
+      <div class="cv-box">
+        <span class="tag">元画像</span>
+        <div class="cv-inner"><canvas id="cvOrig"></canvas></div>
+        <div class="empty-msg" id="origEmpty">画像を読み込むとここに表示されます</div>
+      </div>
+      <div class="cv-box">
+        <span class="tag">ドット絵(ドラッグで編集)</span>
+        <div class="cv-inner">
+          <canvas id="cvOut"></canvas>
+          <canvas id="cvOutGrid" class="overlay"></canvas>
+        </div>
+        <div class="empty-msg" id="outEmpty">サイズを選ぶと変換されます</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>4. 編集</h2>
+    <p class="hint">下の色をクリックして選び、右上のドット絵をクリック/ドラッグで塗ります。</p>
+    <div class="brush-row" id="brushRow"></div>
+    <div class="row" style="margin-top:10px;">
+      <button id="undoBtn" disabled>← 戻す</button>
+      <button id="redoBtn" disabled>進む →</button>
+      <button id="downloadBtn" disabled>PNGをダウンロード</button>
+    </div>
+    <div class="status-line" id="statusLine">画像未読み込み</div>
+  </div>
+
+  <footer>
+    抽出: 出現頻度が高く、互いに離れた色を優先して15色ピックアップしています。<br>
+    変換: ニアレストネイバー(補間なし)でサイズ変更した直後に、各ドットを抽出した15色のうち一番近い色へスナップします。<br>
+    編集: ドラッグ中は描画のみを高速に更新し、ストローク単位(クリックしてから離すまで)で戻す/進むが可能です。
+  </footer>
+</div>
+
+<script>
+(function(){
+  let loadedImage = null;
+  let currentSize = 32;
+  let currentZoom = 12;
+  let editImageData = null;
+  let candidateColors = []; // [{r,g,b,pct}]
+  let palette = [];         // hex strings currently "added"
+  let brushColor = null;
+  let eraserActive = false;
+  let isPainting = false;
+  let undoStack = []; // ImageData snapshots (state before a stroke)
+  let redoStack = [];
+
+  const origCanvas = document.getElementById('cvOrig');
+  const outCanvas = document.getElementById('cvOut');
+  const outGridCanvas = document.getElementById('cvOutGrid');
+  const origEmpty = document.getElementById('origEmpty');
+  const outEmpty = document.getElementById('outEmpty');
+  const fileInput = document.getElementById('fileInput');
+  const drop = document.getElementById('drop');
+  const filenameEl = document.getElementById('filename');
+  const extractBtn = document.getElementById('extractBtn');
+  const candidateGrid = document.getElementById('candidateGrid');
+  const sizeBtns = document.querySelectorAll('#sizeBtns button');
+  const brushRowEl = document.getElementById('brushRow');
+  const undoBtn = document.getElementById('undoBtn');
+  const redoBtn = document.getElementById('redoBtn');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const statusLine = document.getElementById('statusLine');
+
+  function hexToRgb(hex){
+    hex = hex.replace('#','').trim();
+    if(hex.length === 3) hex = hex.split('').map(c=>c+c).join('');
+    const n = parseInt(hex,16);
+    return [(n>>16)&255, (n>>8)&255, n&255];
+  }
+  function rgbToHex(r,g,b){
+    return '#' + [r,g,b].map(v=>v.toString(16).padStart(2,'0')).join('');
+  }
+  function normHex(h){ return h.toLowerCase(); }
+
+  // The image canvas and the grid canvas are both sized at the SAME resolution
+  // (native size * zoom) with no separate CSS scaling trick on either -- this is
+  // what guarantees the grid lines and the pixel cells can never drift apart.
+  function drawScaledImage(canvas, imageData, zoom){
+    const w = imageData.width, h = imageData.height;
+    canvas.width = w * zoom;
+    canvas.height = h * zoom;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    const tmp = document.createElement('canvas');
+    tmp.width = w; tmp.height = h;
+    tmp.getContext('2d').putImageData(imageData, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(tmp, 0, 0, w, h, 0, 0, w*zoom, h*zoom);
+  }
+
+  function drawGrid(canvas, w, h, zoom){
+    canvas.width = w * zoom;
+    canvas.height = h * zoom;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if(zoom < 4) return; // too dense to be useful
+    ctx.strokeStyle = 'rgba(140,130,180,0.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for(let x=0; x<=w; x++){
+      ctx.moveTo(x*zoom + 0.5, 0);
+      ctx.lineTo(x*zoom + 0.5, h*zoom);
+    }
+    for(let y=0; y<=h; y++){
+      ctx.moveTo(0, y*zoom + 0.5);
+      ctx.lineTo(w*zoom, y*zoom + 0.5);
+    }
+    ctx.stroke();
+  }
+
+  function cloneImageData(imgData){
+    return new ImageData(new Uint8ClampedArray(imgData.data), imgData.width, imgData.height);
+  }
+
+  // ---------------- extraction ----------------
+  function extractDominantColors(imageData, maxColors){
+    const freq = new Map();
+    const d = imageData.data;
+    for(let i=0;i<d.length;i+=4){
+      if(d[i+3] === 0) continue;
+      const key = d[i]+','+d[i+1]+','+d[i+2];
+      freq.set(key, (freq.get(key)||0)+1);
+    }
+    const sorted = [...freq.entries()].map(([k,c])=>{
+      const [r,g,b] = k.split(',').map(Number);
+      return {r,g,b,count:c};
+    }).sort((a,b)=>b.count-a.count);
+
+    let minDist = 30;
+    let picked = [];
+    for(let attempt=0; attempt<6; attempt++){
+      picked = [];
+      for(const c of sorted){
+        if(picked.length >= maxColors) break;
+        let ok = true;
+        for(const p of picked){
+          const dr=c.r-p.r, dg=c.g-p.g, db=c.b-p.b;
+          if(dr*dr+dg*dg+db*db < minDist*minDist){ ok=false; break; }
+        }
+        if(ok) picked.push(c);
+      }
+      if(picked.length >= Math.min(maxColors, sorted.length) || minDist<=4) break;
+      minDist = Math.max(4, minDist-6);
+    }
+    const total = sorted.reduce((s,c)=>s+c.count,0) || 1;
+    return picked.map(c=>({...c, pct: c.count/total*100}));
+  }
+
+  function runExtract(){
+    if(!loadedImage) return;
+    const tmp = document.createElement('canvas');
+    tmp.width = loadedImage.width; tmp.height = loadedImage.height;
+    const tctx = tmp.getContext('2d');
+    tctx.imageSmoothingEnabled = false;
+    tctx.drawImage(loadedImage, 0, 0);
+    const raw = tctx.getImageData(0,0,tmp.width,tmp.height);
+
+    candidateColors = extractDominantColors(raw, 15);
+    palette = candidateColors.map(c => rgbToHex(c.r,c.g,c.b)); // all added by default
+    renderCandidateGrid();
+    renderBrushRow();
+    updateSizeBtnsEnabled();
+  }
+  extractBtn.addEventListener('click', runExtract);
+
+  function renderCandidateGrid(){
+    candidateGrid.innerHTML = '';
+    const paletteSet = new Set(palette.map(normHex));
+    candidateColors.forEach(c=>{
+      const hex = rgbToHex(c.r,c.g,c.b);
+      const item = document.createElement('div');
+      item.className = 'candidate' + (paletteSet.has(normHex(hex)) ? ' added' : '');
+      item.title = hex;
+      item.innerHTML = `<div class="cbox" style="background:${hex};"><div class="check">✓</div></div><div class="pct">${c.pct.toFixed(1)}%</div>`;
+      item.addEventListener('click', ()=>{
+        const idx = palette.findIndex(p => normHex(p) === normHex(hex));
+        if(idx >= 0) palette.splice(idx,1);
+        else palette.push(hex);
+        renderCandidateGrid();
+        renderBrushRow();
+        updateSizeBtnsEnabled();
+      });
+      candidateGrid.appendChild(item);
+    });
+  }
+
+  function updateSizeBtnsEnabled(){
+    const ok = !!loadedImage && palette.length > 0;
+    sizeBtns.forEach(b => b.disabled = !ok);
+  }
+
+  // ---------------- file loading ----------------
+  drop.addEventListener('click', ()=> fileInput.click());
+  drop.addEventListener('dragover', (e)=>{ e.preventDefault(); drop.classList.add('drag'); });
+  drop.addEventListener('dragleave', ()=> drop.classList.remove('drag'));
+  drop.addEventListener('drop', (e)=>{
+    e.preventDefault();
+    drop.classList.remove('drag');
+    if(e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', (e)=>{
+    if(e.target.files.length) loadFile(e.target.files[0]);
+  });
+
+  function loadFile(file){
+    filenameEl.textContent = file.name;
+    const reader = new FileReader();
+    reader.onload = (ev)=>{
+      const img = new Image();
+      img.onload = ()=>{
+        loadedImage = img;
+
+        origCanvas.width = img.width;
+        origCanvas.height = img.height;
+        const octx = origCanvas.getContext('2d');
+        octx.imageSmoothingEnabled = false;
+        octx.drawImage(img, 0, 0);
+        origEmpty.style.display = 'none';
+
+        outCanvas.getContext('2d').clearRect(0,0,outCanvas.width,outCanvas.height);
+        outCanvas.classList.remove('paintable');
+        outGridCanvas.getContext('2d').clearRect(0,0,outGridCanvas.width,outGridCanvas.height);
+        outEmpty.style.display = 'block';
+        editImageData = null;
+        undoStack = []; redoStack = [];
+        undoBtn.disabled = true; redoBtn.disabled = true;
+        downloadBtn.disabled = true;
+        statusLine.textContent = '抽出中...';
+
+        extractBtn.disabled = false;
+        runExtract();
+        statusLine.textContent = '色を抽出しました。サイズを選んでください';
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  // ---------------- size -> convert ----------------
+  sizeBtns.forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      currentSize = parseInt(btn.dataset.size, 10);
+      sizeBtns.forEach(b => b.classList.toggle('active', b === btn));
+      convert(currentSize);
+    });
+  });
+
+  function zoomFor(size){
+    return Math.max(4, Math.min(40, Math.round(384 / size)));
+  }
+
+  function convert(size){
+    if(!loadedImage || !palette.length) return;
+    const resized = document.createElement('canvas');
+    resized.width = size; resized.height = size;
+    const rctx = resized.getContext('2d');
+    rctx.imageSmoothingEnabled = false;
+    rctx.drawImage(loadedImage, 0, 0, size, size);
+    const raw = rctx.getImageData(0, 0, size, size);
+
+    const paletteRgb = palette.map(hexToRgb);
+    const d = raw.data;
+    for(let i=0; i<d.length; i+=4){
+      if(d[i+3] === 0) continue;
+      const r = d[i], g = d[i+1], b = d[i+2];
+      let best = 0, bestDist = Infinity;
+      for(let p=0; p<paletteRgb.length; p++){
+        const [pr,pg,pb] = paletteRgb[p];
+        const dr=r-pr, dg=g-pg, db=b-pb;
+        const dist = dr*dr+dg*dg+db*db;
+        if(dist < bestDist){ bestDist = dist; best = p; }
+      }
+      const [nr,ng,nb] = paletteRgb[best];
+      d[i]=nr; d[i+1]=ng; d[i+2]=nb; d[i+3]=255;
+    }
+
+    editImageData = raw;
+    currentZoom = zoomFor(size);
+    drawScaledImage(outCanvas, editImageData, currentZoom);
+    drawGrid(outGridCanvas, size, size, currentZoom);
+    outEmpty.style.display = 'none';
+    outCanvas.classList.add('paintable');
+
+    undoStack = []; redoStack = [];
+    undoBtn.disabled = true; redoBtn.disabled = true;
+    downloadBtn.disabled = false;
+    if(!brushColor && palette.length) brushColor = palette[0];
+    renderBrushRow();
+    statusLine.textContent = size + '×' + size + ' に変換しました(' + palette.length + '色)';
+  }
+
+  // ---------------- brush row ----------------
+  function renderBrushRow(){
+    brushRowEl.innerHTML = '';
+    palette.forEach(hex=>{
+      const b = document.createElement('div');
+      b.className = 'brush' + (!eraserActive && brushColor && normHex(brushColor)===normHex(hex) ? ' selected' : '');
+      b.style.background = hex;
+      b.title = hex;
+      b.addEventListener('click', ()=>{
+        brushColor = hex;
+        eraserActive = false;
+        renderBrushRow();
+      });
+      brushRowEl.appendChild(b);
+    });
+    const eraserEl = document.createElement('div');
+    eraserEl.className = 'brush eraser' + (eraserActive ? ' selected' : '');
+    eraserEl.textContent = '⌫';
+    eraserEl.title = '消しゴム(透明化)';
+    eraserEl.addEventListener('click', ()=>{
+      eraserActive = true;
+      renderBrushRow();
+    });
+    brushRowEl.appendChild(eraserEl);
+  }
+
+  // ---------------- continuous (drag) painting ----------------
+  function canvasToPixel(e, canvas, zoom){
+    // canvas.width/height equal (nativeSize * zoom) -- rect.width/height is only
+    // different from that if the responsive max-width kicked in, so this ratio
+    // still lands on the right cell either way. Divide once by zoom to get the
+    // native pixel index.
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const clientX = (e.touches ? e.touches[0].clientX : e.clientX);
+    const clientY = (e.touches ? e.touches[0].clientY : e.clientY);
+    const x = (clientX - rect.left) * scaleX;
+    const y = (clientY - rect.top) * scaleY;
+    return { px: Math.floor(x / zoom), py: Math.floor(y / zoom) };
+  }
+
+  function paintAt(e){
+    if(!editImageData) return;
+    const { px, py } = canvasToPixel(e, outCanvas, currentZoom);
+    if(px<0 || py<0 || px>=editImageData.width || py>=editImageData.height) return;
+    const idx = (py*editImageData.width + px) * 4;
+    const d = editImageData.data;
+    if(eraserActive){
+      if(d[idx+3] === 0) return;
+      d[idx+3] = 0;
+    } else if(brushColor){
+      const [r,g,b] = hexToRgb(brushColor);
+      if(d[idx]===r && d[idx+1]===g && d[idx+2]===b && d[idx+3]===255) return;
+      d[idx]=r; d[idx+1]=g; d[idx+2]=b; d[idx+3]=255;
+    } else {
+      return;
+    }
+    // Only repaint the single touched cell -- far cheaper than redrawing the
+    // whole canvas, and it stays in the exact same coordinate space as the grid.
+    const ctx = outCanvas.getContext('2d');
+    if(eraserActive){
+      ctx.clearRect(px*currentZoom, py*currentZoom, currentZoom, currentZoom);
+    } else {
+      ctx.fillStyle = brushColor;
+      ctx.fillRect(px*currentZoom, py*currentZoom, currentZoom, currentZoom);
+    }
+    statusLine.textContent = `(${px}, ${py}) を塗りました`;
+  }
+
+  function strokeStart(e){
+    if(!editImageData) return;
+    e.preventDefault();
+    undoStack.push(cloneImageData(editImageData));
+    if(undoStack.length > 50) undoStack.shift();
+    redoStack = [];
+    undoBtn.disabled = false;
+    redoBtn.disabled = true;
+    isPainting = true;
+    paintAt(e);
+  }
+  function strokeMove(e){
+    if(!isPainting) return;
+    e.preventDefault();
+    paintAt(e);
+  }
+  function strokeEnd(){
+    isPainting = false;
+  }
+
+  outCanvas.addEventListener('mousedown', strokeStart);
+  outCanvas.addEventListener('mousemove', strokeMove);
+  window.addEventListener('mouseup', strokeEnd);
+  outCanvas.addEventListener('touchstart', strokeStart, {passive:false});
+  outCanvas.addEventListener('touchmove', strokeMove, {passive:false});
+  window.addEventListener('touchend', strokeEnd);
+
+  undoBtn.addEventListener('click', ()=>{
+    if(!undoStack.length || !editImageData) return;
+    redoStack.push(cloneImageData(editImageData));
+    editImageData = undoStack.pop();
+    drawScaledImage(outCanvas, editImageData, currentZoom);
+    undoBtn.disabled = undoStack.length === 0;
+    redoBtn.disabled = false;
+  });
+  redoBtn.addEventListener('click', ()=>{
+    if(!redoStack.length || !editImageData) return;
+    undoStack.push(cloneImageData(editImageData));
+    editImageData = redoStack.pop();
+    drawScaledImage(outCanvas, editImageData, currentZoom);
+    redoBtn.disabled = redoStack.length === 0;
+    undoBtn.disabled = false;
+  });
+
+  downloadBtn.addEventListener('click', ()=>{
+    if(!editImageData) return;
+    const tmp = document.createElement('canvas');
+    tmp.width = editImageData.width; tmp.height = editImageData.height;
+    tmp.getContext('2d').putImageData(editImageData, 0, 0);
+    const link = document.createElement('a');
+    link.download = `dotart_${currentSize}x${currentSize}.png`;
+    link.href = tmp.toDataURL('image/png');
+    link.click();
+  });
+})();
+</script>
+</body>
+</html>
