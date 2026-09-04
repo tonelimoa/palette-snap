@@ -525,30 +525,35 @@
     statusLine.textContent = 'パレットを読み込みました(' + palette.length + '色)';
   }
 
+  function showStatus(text, isError){
+    statusLine.textContent = text;
+    statusLine.style.color = isError ? 'var(--danger)' : '';
+  }
+
   savePaletteBtn.addEventListener('click', ()=>{
-    if(!palette.length){ alert('保存するパレットがありません。'); return; }
+    if(!palette.length){ showStatus('保存するパレットがありません。', true); return; }
     try{
       localStorage.setItem(PALETTE_KEY, JSON.stringify(palette));
-      statusLine.textContent = 'パレットを保存しました(' + palette.length + '色)';
+      showStatus('パレットを保存しました(' + palette.length + '色)', false);
     } catch(e){
-      alert('保存に失敗しました。ブラウザのプライベートモードなどでは保存できない場合があります。');
+      showStatus('保存に失敗しました(この環境ではブラウザ保存が使えない可能性があります。下の「テキストで書き出し」を使ってください)。', true);
     }
   });
 
   loadPaletteBtn.addEventListener('click', ()=>{
     try{
       const data = localStorage.getItem(PALETTE_KEY);
-      if(!data){ alert('保存されたパレットが見つかりません。'); return; }
+      if(!data){ showStatus('保存されたパレットが見つかりません。', true); return; }
       applyLoadedPalette(data);
     } catch(e){
-      alert('読み込みに失敗しました。保存データが壊れている可能性があります。');
+      showStatus('読み込みに失敗しました(この環境ではブラウザ保存が使えない可能性があります)。', true);
     }
   });
 
   // Text export/import: doesn't depend on any storage mechanism at all, so it
   // works the same regardless of how/where this page is being opened.
   exportTextBtn.addEventListener('click', async ()=>{
-    if(!palette.length){ alert('書き出すパレットがありません。'); return; }
+    if(!palette.length){ showStatus('書き出すパレットがありません。', true); return; }
     const text = palette.join('\n');
     paletteText.value = text;
     paletteText.style.display = 'block';
@@ -558,11 +563,11 @@
     try{
       if(navigator.clipboard && navigator.clipboard.writeText){
         await navigator.clipboard.writeText(text);
-        statusLine.textContent = 'パレットをコピーしました(下のテキストをメモなどに保存してもOK)';
+        showStatus('パレットをコピーしました(下のテキストをメモなどに保存してもOK)', false);
         return;
       }
     } catch(e){ /* clipboard permission denied -- fall through to manual copy */ }
-    statusLine.textContent = '自動コピーできなかったので、下のテキストを手動でコピーしてください';
+    showStatus('自動コピーできなかったので、下のテキストを手動でコピーしてください', false);
   });
 
   importTextBtn.addEventListener('click', ()=>{
@@ -570,7 +575,7 @@
     paletteText.style.display = 'block';
     paletteTextApplyRow.style.display = 'flex';
     paletteText.focus();
-    statusLine.textContent = 'HEXコードを貼り付けて「この内容を読み込む」を押してください';
+    showStatus('HEXコードを貼り付けて「この内容を読み込む」を押してください', false);
   });
 
   applyPaletteText.addEventListener('click', ()=>{
@@ -582,9 +587,9 @@
       renderCandidateGrid();
       renderBrushRow();
       updateSizeBtnsEnabled();
-      statusLine.textContent = 'パレットを読み込みました(' + palette.length + '色)';
+      showStatus('パレットを読み込みました(' + palette.length + '色)', false);
     } else {
-      alert('有効なHEXコードが見つかりませんでした。');
+      showStatus('有効なHEXコードが見つかりませんでした。', true);
     }
     paletteText.style.display = 'none';
     paletteTextApplyRow.style.display = 'none';
