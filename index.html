@@ -940,7 +940,46 @@
     undoBtn.disabled = false;
   });
 
-  downloadBtn.addEventListener('click', ()=>{
+  /* ホーム画面に追加して開いた「スタンドアロン表示」かどうかを判定。
+     この状態のiOS Safariでは通常の<a download>クリックでは保存できない
+     (何も起きない)ことがあるため、その場合だけ扱いを変える。 */
+  function isStandaloneMode(){
+    return (window.navigator.standalone === true) ||
+      (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+  }
+
+  async function downloadBlob(blob, filename){
+    if(isStandaloneMode()){
+      // スタンドアロン表示時: まずWeb Share APIで共有シートを呼び出す
+      try{
+        const file = new File([blob], filename, {type: blob.type || 'image/png'});
+        if(navigator.canShare && navigator.canShare({files:[file]})){
+          await navigator.share({files:[file]});
+          showStatus('共有シートを開きました', false);
+          return true;
+        }
+      } catch(err){
+        if(err && err.name === 'AbortError'){ return true; } // ユーザーが共有をキャンセル
+        // それ以外のエラーは下のフォールバックへ
+      }
+      // Web Share APIが使えない/失敗した場合: 新しいタブで開く
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(()=> URL.revokeObjectURL(url), 60000);
+      showStatus(`「${filename}」を新しいタブで開きました。保存できない場合は画面を長押しして保存してください`, false);
+      return true;
+    }
+    // 通常のブラウザタブ表示: 素直に<a download>を試す(成功したかは分からないので
+    // ここではメッセージを出さず、呼び出し側の汎用メッセージに任せる)
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 500);
+    return false;
+  }
+
+  downloadBtn.addEventListener('click', async ()=>{
     if(!editImageData) return;
     const tmp = document.createElement('canvas');
     tmp.width = editImageData.width; tmp.height = editImageData.height;
@@ -948,25 +987,22 @@
     const filename = `dotart_${currentSize}x${currentSize}.png`;
     const dataUrl = tmp.toDataURL('image/png');
 
-    // Try the normal anchor-download first -- works on desktop browsers.
-    // Some mobile webviews (including embedded/sandboxed ones) show a
-    // "download this file?" prompt but never actually complete the save, so
-    // we don't rely on this alone.
+    let messageShown = false;
     try{
-      const link = document.createElement('a');
-      link.download = filename;
-      link.href = dataUrl;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    } catch(e){ /* ignore -- the fallback below still works */ }
+      const blob = await new Promise(resolve => tmp.toBlob(resolve, 'image/png'));
+      if(blob){
+        messageShown = await downloadBlob(blob, filename);
+      }
+    } catch(e){ /* ignore -- the long-press fallback below still works */ }
 
-    // Always also show a long-press-to-save image. This uses the OS's native
-    // "Save Image" menu directly and doesn't depend on the browser's download
-    // machinery at all, so it works even where the above doesn't.
+    // Always also show a long-press-to-save image regardless of the above,
+    // since it uses the OS's native "Save Image" menu directly and doesn't
+    // depend on any browser download/share machinery at all.
     downloadPreviewImg.src = dataUrl;
     downloadFallback.style.display = 'block';
-    statusLine.textContent = '自動ダウンロードが効かない場合は、下の画像を長押しして保存してください';
+    if(!messageShown){
+      showStatus('自動ダウンロードが効かない場合は、下の画像を長押しして保存してください', false);
+    }
   });
 
   window.addEventListener('resize', ()=>{
