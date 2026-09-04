@@ -186,17 +186,9 @@
     <p class="hint">クリックで各色をパレットに入れる/外す(緑チェック=使用中)。</p>
     <div class="row" style="margin-bottom:10px;">
       <button id="extractBtn" disabled>画像から抽出しなおす</button>
-      <button id="savePaletteBtn">パレットを保存</button>
-      <button id="loadPaletteBtn">パレットを読み込み</button>
-    </div>
-    <div class="row" style="margin-bottom:10px;">
-      <button id="exportTextBtn">テキストで書き出し</button>
-      <button id="importTextBtn">テキストから読み込み</button>
-    </div>
-    <textarea id="paletteText" style="display:none; margin-bottom:8px;" placeholder="#171630&#10;#361816&#10;...(改行区切り)"></textarea>
-    <div class="row" id="paletteTextApplyRow" style="display:none; margin-bottom:10px;">
-      <button id="applyPaletteText" class="active">この内容を読み込む</button>
-      <button id="cancelPaletteText">閉じる</button>
+      <button id="savePaletteBtn">パレットを保存(.txt)</button>
+      <button id="loadPaletteBtn">パレットを読み込み(.txt)</button>
+      <input type="file" id="paletteFileInput" accept=".txt,text/plain" style="display:none;">
     </div>
     <div class="candidate-grid" id="candidateGrid"></div>
   </div>
@@ -302,12 +294,7 @@
   const extractBtn = document.getElementById('extractBtn');
   const savePaletteBtn = document.getElementById('savePaletteBtn');
   const loadPaletteBtn = document.getElementById('loadPaletteBtn');
-  const exportTextBtn = document.getElementById('exportTextBtn');
-  const importTextBtn = document.getElementById('importTextBtn');
-  const paletteText = document.getElementById('paletteText');
-  const paletteTextApplyRow = document.getElementById('paletteTextApplyRow');
-  const applyPaletteText = document.getElementById('applyPaletteText');
-  const cancelPaletteText = document.getElementById('cancelPaletteText');
+  const paletteFileInput = document.getElementById('paletteFileInput');
   const candidateGrid = document.getElementById('candidateGrid');
   const sizeBtns = document.querySelectorAll('#sizeBtns button');
   const brushRowEl = document.getElementById('brushRow');
@@ -513,16 +500,16 @@
   }
   extractBtn.addEventListener('click', runExtract);
 
-  const PALETTE_KEY = 'dotconverter_palette';
-
-  function applyLoadedPalette(jsonStr){
-    const arr = JSON.parse(jsonStr);
-    if(!Array.isArray(arr) || !arr.length) throw new Error('invalid palette data');
-    palette = arr.filter(h => /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(h));
+  function applyLoadedPalette(text){
+    const raw = text.split(/[\r\n,]+/).map(s=>s.trim()).filter(Boolean);
+    const cleaned = raw.map(s => s.startsWith('#') ? s : '#'+s)
+      .filter(s => /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(s));
+    if(!cleaned.length) throw new Error('invalid palette data');
+    palette = cleaned;
     renderCandidateGrid();
     renderBrushRow();
     updateSizeBtnsEnabled();
-    statusLine.textContent = 'パレットを読み込みました(' + palette.length + '色)';
+    showStatus('パレットを読み込みました(' + palette.length + '色)', false);
   }
 
   function showStatus(text, isError){
@@ -530,74 +517,37 @@
     statusLine.style.color = isError ? 'var(--danger)' : '';
   }
 
-  savePaletteBtn.addEventListener('click', ()=>{
+  // Palette save/load are real files (.txt, one HEX code per line) -- uses the
+  // exact same download path (downloadBlob/isStandaloneMode, defined below)
+  // as the PNG export, so it's just as reliable across environments.
+  savePaletteBtn.addEventListener('click', async ()=>{
     if(!palette.length){ showStatus('保存するパレットがありません。', true); return; }
+    const blob = new Blob([palette.join('\n')], {type:'text/plain'});
     try{
-      localStorage.setItem(PALETTE_KEY, JSON.stringify(palette));
-      showStatus('パレットを保存しました(' + palette.length + '色)', false);
+      await downloadBlob(blob, 'palette.txt');
     } catch(e){
-      showStatus('保存に失敗しました(この環境ではブラウザ保存が使えない可能性があります。下の「テキストで書き出し」を使ってください)。', true);
+      showStatus('保存に失敗しました。', true);
     }
   });
 
   loadPaletteBtn.addEventListener('click', ()=>{
-    try{
-      const data = localStorage.getItem(PALETTE_KEY);
-      if(!data){ showStatus('保存されたパレットが見つかりません。', true); return; }
-      applyLoadedPalette(data);
-    } catch(e){
-      showStatus('読み込みに失敗しました(この環境ではブラウザ保存が使えない可能性があります)。', true);
-    }
+    paletteFileInput.click();
   });
 
-  // Text export/import: doesn't depend on any storage mechanism at all, so it
-  // works the same regardless of how/where this page is being opened.
-  exportTextBtn.addEventListener('click', async ()=>{
-    if(!palette.length){ showStatus('書き出すパレットがありません。', true); return; }
-    const text = palette.join('\n');
-    paletteText.value = text;
-    paletteText.style.display = 'block';
-    paletteTextApplyRow.style.display = 'none';
-    paletteText.focus();
-    paletteText.select();
-    try{
-      if(navigator.clipboard && navigator.clipboard.writeText){
-        await navigator.clipboard.writeText(text);
-        showStatus('パレットをコピーしました(下のテキストをメモなどに保存してもOK)', false);
-        return;
+  paletteFileInput.addEventListener('change', (e)=>{
+    const file = e.target.files[0];
+    paletteFileInput.value = ''; // allow re-selecting the same file next time
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev)=>{
+      try{
+        applyLoadedPalette(ev.target.result);
+      } catch(err){
+        showStatus('読み込みに失敗しました。ファイルの中身を確認してください。', true);
       }
-    } catch(e){ /* clipboard permission denied -- fall through to manual copy */ }
-    showStatus('自動コピーできなかったので、下のテキストを手動でコピーしてください', false);
-  });
-
-  importTextBtn.addEventListener('click', ()=>{
-    paletteText.value = '';
-    paletteText.style.display = 'block';
-    paletteTextApplyRow.style.display = 'flex';
-    paletteText.focus();
-    showStatus('HEXコードを貼り付けて「この内容を読み込む」を押してください', false);
-  });
-
-  applyPaletteText.addEventListener('click', ()=>{
-    const raw = paletteText.value.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean);
-    const cleaned = raw.map(s => s.startsWith('#') ? s : '#'+s)
-      .filter(s => /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(s));
-    if(cleaned.length){
-      palette = cleaned;
-      renderCandidateGrid();
-      renderBrushRow();
-      updateSizeBtnsEnabled();
-      showStatus('パレットを読み込みました(' + palette.length + '色)', false);
-    } else {
-      showStatus('有効なHEXコードが見つかりませんでした。', true);
-    }
-    paletteText.style.display = 'none';
-    paletteTextApplyRow.style.display = 'none';
-  });
-
-  cancelPaletteText.addEventListener('click', ()=>{
-    paletteText.style.display = 'none';
-    paletteTextApplyRow.style.display = 'none';
+    };
+    reader.onerror = ()=> showStatus('ファイルの読み込みに失敗しました。', true);
+    reader.readAsText(file);
   });
 
   function renderCandidateGrid(){
