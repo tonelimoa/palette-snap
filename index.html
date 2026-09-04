@@ -131,6 +131,19 @@
 
   .status-line{ font-size: 11px; color: var(--ink-dim); margin-top: 10px; }
 
+  #downloadPreviewImg{
+    image-rendering: pixelated;
+    width: 192px; height: 192px;
+    border: 1px solid var(--line);
+    background:
+      linear-gradient(45deg, #2a2650 25%, transparent 25%) 0 0/16px 16px,
+      linear-gradient(-45deg, #2a2650 25%, transparent 25%) 0 0/16px 16px,
+      linear-gradient(45deg, transparent 75%, #2a2650 75%) 0 0/16px 16px,
+      linear-gradient(-45deg, transparent 75%, #2a2650 75%) 0 0/16px 16px,
+      #1a1738;
+    display: block;
+  }
+
   /* ---- fixed bottom bar: palette + undo/redo ---- */
   .bottom-bar{
     position: fixed; left:0; right:0; bottom:0; z-index: 50;
@@ -214,6 +227,10 @@
       <button id="downloadBtn" disabled>PNGをダウンロード</button>
     </div>
     <div class="status-line" id="statusLine">画像未読み込み</div>
+    <div id="downloadFallback" style="display:none; margin-top:14px;">
+      <p class="hint">自動ダウンロードが反応しない場合は、下の画像を<strong>長押し</strong>して「画像を保存」を選んでください。</p>
+      <img id="downloadPreviewImg" alt="ダウンロード用プレビュー">
+    </div>
   </div>
 
   <div class="panel">
@@ -282,6 +299,8 @@
   const undoBtn = document.getElementById('undoBtn');
   const redoBtn = document.getElementById('redoBtn');
   const downloadBtn = document.getElementById('downloadBtn');
+  const downloadFallback = document.getElementById('downloadFallback');
+  const downloadPreviewImg = document.getElementById('downloadPreviewImg');
   const statusLine = document.getElementById('statusLine');
 
   function hexToRgb(hex){
@@ -592,6 +611,7 @@
         undoStack = []; redoStack = [];
         undoBtn.disabled = true; redoBtn.disabled = true;
         downloadBtn.disabled = true;
+        downloadFallback.style.display = 'none';
         statusLine.textContent = '抽出中...';
 
         extractBtn.disabled = false;
@@ -659,6 +679,7 @@
     undoStack = []; redoStack = [];
     undoBtn.disabled = true; redoBtn.disabled = true;
     downloadBtn.disabled = false;
+    downloadFallback.style.display = 'none';
     if(!brushColor && palette.length) brushColor = palette[0];
     renderBrushRow();
     statusLine.textContent = size + '×' + size + ' に変換しました(' + palette.length + '色)';
@@ -873,10 +894,28 @@
     const tmp = document.createElement('canvas');
     tmp.width = editImageData.width; tmp.height = editImageData.height;
     tmp.getContext('2d').putImageData(editImageData, 0, 0);
-    const link = document.createElement('a');
-    link.download = `dotart_${currentSize}x${currentSize}.png`;
-    link.href = tmp.toDataURL('image/png');
-    link.click();
+    const filename = `dotart_${currentSize}x${currentSize}.png`;
+    const dataUrl = tmp.toDataURL('image/png');
+
+    // Try the normal anchor-download first -- works on desktop browsers.
+    // Some mobile webviews (including embedded/sandboxed ones) show a
+    // "download this file?" prompt but never actually complete the save, so
+    // we don't rely on this alone.
+    try{
+      const link = document.createElement('a');
+      link.download = filename;
+      link.href = dataUrl;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch(e){ /* ignore -- the fallback below still works */ }
+
+    // Always also show a long-press-to-save image. This uses the OS's native
+    // "Save Image" menu directly and doesn't depend on the browser's download
+    // machinery at all, so it works even where the above doesn't.
+    downloadPreviewImg.src = dataUrl;
+    downloadFallback.style.display = 'block';
+    statusLine.textContent = '自動ダウンロードが効かない場合は、下の画像を長押しして保存してください';
   });
 
   window.addEventListener('resize', ()=>{
