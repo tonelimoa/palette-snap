@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>ドット絵コンバーター</title>
 <style>
   :root{
@@ -17,123 +17,115 @@
     --ok: #6ee6a0;
     --danger: #e5504d;
   }
-  * { box-sizing: border-box; }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color: transparent; }
   html,body{
-    margin:0; padding:0; min-height:100%;
+    margin:0; padding:0; height:100%;
     background: var(--bg);
     color: var(--ink);
     font-family: "SF Mono","Consolas","Menlo",monospace;
+    overscroll-behavior: none;
   }
   body{
+    height: 100dvh;
+    display:flex; flex-direction:column;
+    overflow:hidden;
     background-image:
       radial-gradient(circle at 10% 0%, rgba(242,98,5,0.10), transparent 40%),
       radial-gradient(circle at 90% 100%, rgba(26,38,91,0.35), transparent 45%);
   }
-  .wrap{ max-width: 980px; margin: 0 auto; padding: 28px 20px 160px; }
 
-  header{ margin-bottom: 22px; }
-  .kicker{ color: var(--accent-2); letter-spacing: 0.02em; font-size: 12px; margin: 0 0 6px; }
-  h1{ margin: 0 0 6px; font-size: 24px; line-height: 1.3; font-weight: 700; color: var(--ink); }
-  .sub{ color: var(--ink-dim); font-size: 13px; line-height: 1.7; max-width: 62ch; }
+  button, select{ font-family:inherit; }
 
-  .panel{ background: var(--panel); border: 1px solid var(--line); padding: 16px; margin-top: 18px; }
-  .panel h2{
-    margin: 0 0 12px; font-size: 12px; letter-spacing: 0.04em; color: var(--ink-dim);
-    font-weight: 700; text-transform: uppercase; display:flex; align-items:center; gap:8px;
+  /* ---------------- top bar: undo/redo (left) + settings/save (right) ---------------- */
+  .topbar{
+    flex-shrink:0; height: 50px;
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding: 0 10px; padding-top: env(safe-area-inset-top, 0px);
+    background: var(--panel); border-bottom:1px solid var(--line);
+    position:relative; z-index: 30;
   }
-  .panel h2::before{ content:""; width:6px; height:6px; background: var(--accent); display:inline-block; }
-  .panel p.hint{ font-size: 11px; color: var(--ink-dim); line-height:1.6; margin: 0 0 10px; }
-
-  /* ---- upload ---- */
-  .drop{
-    border: 1px dashed var(--line); background: var(--panel-2); padding: 20px 12px;
-    text-align:center; cursor: pointer; transition: border-color .15s ease, background .15s ease;
+  .grp{ display:flex; gap:7px; }
+  .ibtn{
+    width:36px; height:36px; border:1px solid var(--line); background:var(--panel-2);
+    color:var(--ink); display:flex; align-items:center; justify-content:center; font-size:16px;
+    cursor:pointer; border-radius:5px; flex-shrink:0;
   }
-  .drop:hover, .drop.drag{ border-color: var(--accent); background: #2a2456; }
-  .drop p{ margin: 6px 0 0; font-size: 12px; color: var(--ink-dim); }
-  .drop .big{ font-size: 22px; }
-  input[type=file]{ display:none; }
-  .filename{ margin-top: 10px; font-size: 11px; color: var(--ink-dim); word-break: break-all; }
+  .ibtn:disabled{ opacity:0.3; cursor:not-allowed; }
+  .ibtn.accent{ color:var(--accent-2); border-color:var(--accent-2); }
+  .ibtn.on{ color:#1a0e05; background: var(--accent-2); border-color: var(--accent-2); }
 
-  button{
-    font-family: inherit; cursor:pointer; border: 1px solid var(--line); background: var(--panel-2);
-    color: var(--ink); padding: 9px 14px; font-size: 12px; letter-spacing: 0.02em;
-  }
-  button:hover{ border-color: var(--accent); color: var(--accent-2); }
-  button.active{ border-color: var(--accent); color: #1a0e05; background: var(--accent); font-weight:700; }
-  button:disabled{ opacity:0.35; cursor:not-allowed; }
-  button:disabled:hover{ border-color: var(--line); color: var(--ink); background: var(--panel-2); }
-
-  .row{ display:flex; gap:8px; align-items:center; flex-wrap: wrap; }
-  .size-btns button{ min-width: 70px; }
-
-  /* ---- candidate swatches (extracted colors == working palette) ---- */
-  .candidate-grid{ display:flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
-  .candidate{ width: 40px; cursor:pointer; text-align:center; user-select:none; }
-  .candidate .cbox{ width: 40px; height: 32px; border: 2px solid var(--line); position:relative; opacity: 0.35; }
-  .candidate.added .cbox{ border-color: var(--ok); opacity: 1; }
-  .candidate .check{
-    position:absolute; top:2px; right:2px; font-size:10px; color:#0a0a0a;
-    background: var(--ok); width:14px; height:14px; display:none; align-items:center; justify-content:center; line-height:1;
-  }
-  .candidate.added .check{ display:flex; }
-  .candidate .pct{ font-size: 9px; color: var(--ink-dim); margin-top: 3px; }
-
-  /* ---- preview ---- */
-  .canvases{ display:grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  @media (max-width: 700px){ .canvases{ grid-template-columns: 1fr; } }
-  .cv-box{
+  /* ---------------- main canvas area (fills remaining space, no scroll) ---------------- */
+  .canvasarea{
+    flex:1; min-height:0; position:relative; overflow:hidden;
+    touch-action: none;
     background:
       linear-gradient(45deg, #2a2650 25%, transparent 25%) 0 0/16px 16px,
       linear-gradient(-45deg, #2a2650 25%, transparent 25%) 0 0/16px 16px,
       linear-gradient(45deg, transparent 75%, #2a2650 75%) 0 0/16px 16px,
       linear-gradient(-45deg, transparent 75%, #2a2650 75%) 0 0/16px 16px,
       #1a1738;
-    border: 1px solid var(--line);
-    display:flex; align-items:center; justify-content:center;
-    min-height: 200px; overflow: hidden; position: relative;
-  }
-  .cv-box .tag{
-    position:absolute; top:0; left:0; z-index: 3; background: var(--panel); color: var(--ink-dim);
-    font-size: 10px; padding: 3px 8px; letter-spacing: 0.05em;
-    border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
-  }
-  .cv-inner{ position: relative; max-width: 100%; }
-  canvas{ image-rendering: pixelated; display:block; max-width: 100%; height: auto; }
-  .cv-inner canvas.overlay{ position:absolute; top:0; left:0; pointer-events:none; }
-
-  /* the editable dot-art viewport: fixed square window, pinch/pan happens only inside it */
-  #editViewport{
-    aspect-ratio: 1 / 1;
-    min-height: 0;
-    touch-action: none;
   }
   #outTransformWrap{
-    position: absolute;
-    top: 0; left: 0;
-    transform-origin: 0 0;
-    cursor: crosshair;
+    position: absolute; top:0; left:0; transform-origin: 0 0; cursor: crosshair;
   }
-  #outTransformWrap canvas{ max-width: none; height: auto; }
+  #outTransformWrap canvas{ display:block; image-rendering: pixelated; }
   #outTransformWrap canvas.overlay{ position:absolute; top:0; left:0; pointer-events:none; }
 
-  .empty-msg{ color: var(--ink-dim); font-size: 12px; text-align:center; padding: 40px 10px; z-index: 2; }
-
-  /* ---- palette / brush ---- */
-  .brush-row{ display:flex; flex-wrap:wrap; gap: 6px; }
-  .brush{ width: 26px; height: 26px; border: 2px solid var(--line); cursor:pointer; flex-shrink:0; }
-  .brush.selected{ border-color: var(--accent-2); box-shadow: 0 0 0 2px rgba(247,167,8,0.35); }
-  .brush.eraser{
-    display:flex; align-items:center; justify-content:center; background: var(--panel-2);
-    color: var(--ink-dim); font-size: 14px;
+  .drop{
+    position:absolute; inset: 0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:10px; cursor:pointer; padding: 20px;
   }
-  .brush.eraser.selected{ color: var(--accent-2); }
+  .drop .big{ font-size: 34px; }
+  .drop p{ margin:0; font-size:13px; color: var(--ink-dim); text-align:center; max-width:26ch; line-height:1.7; }
+  .drop.drag{ background: rgba(242,98,5,0.08); }
 
-  .status-line{ font-size: 11px; color: var(--ink-dim); margin-top: 10px; }
+  /* ---------------- slide-up sheets (settings / download fallback) ---------------- */
+  .backdrop{
+    position:absolute; inset:0; background: rgba(5,4,10,0.45); z-index:15;
+  }
+  .sheet{
+    position:absolute; left:0; right:0; bottom:0; z-index:20;
+    background: var(--panel); border-top:1px solid var(--line);
+    padding: 14px 14px calc(14px + env(safe-area-inset-bottom, 0px));
+    max-height: 78%; overflow-y: auto;
+    box-shadow: 0 -10px 26px rgba(0,0,0,0.4);
+  }
+  .sheet h3{
+    margin:0 0 10px; font-size:11px; letter-spacing:0.04em; color: var(--ink-dim);
+    font-weight:700; text-transform:uppercase; display:flex; align-items:center; gap:8px;
+  }
+  .sheet h3::before{ content:""; width:6px; height:6px; background: var(--accent); display:inline-block; }
+  .sheet-row{ display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+  .sheet-row .lbl{ font-size:11px; color: var(--ink-dim); min-width:56px; }
+  .gsbtn{
+    height:32px; padding:0 12px; border:1px solid var(--line); background: var(--panel-2);
+    color: var(--ink); font-size:12px; cursor:pointer; border-radius:5px; display:flex; align-items:center; gap:6px;
+  }
+  .gsbtn:hover{ border-color: var(--accent); color: var(--accent-2); }
+  .gsbtn:disabled{ opacity:0.35; cursor:not-allowed; }
+  select#sizeSelect{
+    height:32px; padding:0 10px; border:1px solid var(--line); background: var(--panel-2);
+    color: var(--accent-2); font-weight:700; font-size:13px; border-radius:5px; cursor:pointer;
+  }
+  select#sizeSelect:disabled{ opacity:0.35; cursor:not-allowed; color: var(--ink); }
+  .filename{ font-size:10px; color: var(--ink-dim); word-break: break-all; }
+
+  .candidate-grid{ display:flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+  .candidate{ width: 38px; cursor:pointer; text-align:center; user-select:none; }
+  .candidate .cbox{ width: 38px; height: 30px; border: 2px solid var(--line); position:relative; opacity: 0.35; border-radius:3px; }
+  .candidate.added .cbox{ border-color: var(--ok); opacity: 1; }
+  .candidate .check{
+    position:absolute; top:2px; right:2px; font-size:9px; color:#0a0a0a;
+    background: var(--ok); width:13px; height:13px; display:none; align-items:center; justify-content:center; line-height:1; border-radius:2px;
+  }
+  .candidate.added .check{ display:flex; }
+
+  .status-line{ font-size: 11px; color: var(--ink-dim); line-height:1.6; margin-top: 2px; }
+  .hint-line{ font-size: 10px; color: var(--ink-dim); line-height:1.6; margin: 2px 0 12px; opacity:0.8; }
 
   #downloadPreviewImg{
     image-rendering: pixelated;
-    width: 192px; height: 192px;
+    width: 160px; height: 160px;
     border: 1px solid var(--line);
     background:
       linear-gradient(45deg, #2a2650 25%, transparent 25%) 0 0/16px 16px,
@@ -141,118 +133,107 @@
       linear-gradient(45deg, transparent 75%, #2a2650 75%) 0 0/16px 16px,
       linear-gradient(-45deg, transparent 75%, #2a2650 75%) 0 0/16px 16px,
       #1a1738;
-    display: block;
+    display: block; margin-top:6px;
+  }
+  .close-sheet{
+    position:absolute; top:8px; right:10px; width:26px; height:26px; border:1px solid var(--line);
+    background: var(--panel-2); color: var(--ink-dim); border-radius:5px; display:flex; align-items:center;
+    justify-content:center; cursor:pointer; font-size:13px;
   }
 
-  /* ---- fixed bottom bar: palette + undo/redo ---- */
-  .bottom-bar{
-    position: fixed; left:0; right:0; bottom:0; z-index: 50;
-    background: var(--panel);
-    border-top: 1px solid var(--line);
-    padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px));
-    display:flex; align-items:center; gap:10px;
+  /* ---------------- bottom bar: big palette, always 2 rows ---------------- */
+  .bottombar{
+    flex-shrink:0;
+    background: var(--panel); border-top: 1px solid var(--line);
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+    position:relative; z-index: 25;
   }
-  .bottom-bar .brush-row{ flex:1; min-width:0; }
-  .bottom-bar-actions{ display:flex; gap:8px; flex-shrink:0; }
-  .bottom-bar-actions button{ font-size:16px; padding:8px 14px; line-height:1; }
+  .paletterow{
+    display:grid; grid-template-rows: repeat(2, 1fr); grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr); gap: 6px;
+    height: 88px;
+  }
+  .brush{ width:100%; height:100%; border: 2px solid var(--line); cursor:pointer; border-radius:5px; }
+  .brush.selected{ border-color: var(--accent-2); box-shadow: 0 0 0 2px rgba(247,167,8,0.35); }
+  .brush.eraser{
+    display:flex; align-items:center; justify-content:center; background: var(--panel-2);
+    color: var(--ink-dim); font-size: 18px;
+  }
+  .brush.eraser.selected{ color: var(--accent-2); }
+  .bottombar.empty .paletterow{ opacity:0.25; pointer-events:none; }
+  .bottombar-msg{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    font-size:11px; color: var(--ink-dim); pointer-events:none;
+  }
 
-  footer{
-    margin-top: 30px; font-size: 11px; color: var(--ink-dim); line-height: 1.8;
-    border-top: 1px solid var(--line); padding-top: 14px;
-  }
+  input[type=file]{ display:none; }
 </style>
 </head>
 <body>
-<div class="wrap">
 
-  <header>
-    <p class="kicker">DOT CONVERTER</p>
-    <h1>特徴色15色を抽出してドット絵に変換・編集</h1>
-    <p class="sub">画像から特徴的な15色を自動抽出し、その色だけでドット絵(8×8〜64×64)に変換します。編集エリアは1本指で塗る、2本指でズーム/移動です。</p>
-  </header>
+  <div class="topbar">
+    <div class="grp">
+      <button id="undoBtn" class="ibtn" title="戻す" disabled>←</button>
+      <button id="redoBtn" class="ibtn" title="進む" disabled>→</button>
+    </div>
+    <div class="grp">
+      <button id="gearBtn" class="ibtn" title="画像・抽出・サイズ">⚙</button>
+      <button id="savePaletteBtn" class="ibtn accent" title="パレットを保存">💾</button>
+      <button id="loadPaletteBtn" class="ibtn accent" title="パレットを読み込み">📂</button>
+      <button id="downloadBtn" class="ibtn accent" title="PNGをダウンロード" disabled>⬇</button>
+    </div>
+  </div>
 
-  <div class="panel">
-    <h2>1. 画像を読み込む</h2>
+  <div class="canvasarea" id="editViewport">
+    <div id="outTransformWrap">
+      <canvas id="cvOut"></canvas>
+      <canvas id="cvOutGrid" class="overlay"></canvas>
+    </div>
+
     <div class="drop" id="drop">
       <div class="big">📁</div>
-      <p>クリックまたはドラッグ&ドロップ</p>
+      <p>クリックまたはドラッグ&ドロップで画像を読み込み<br>→ 自動で15色抽出してドット絵に変換します</p>
     </div>
-    <input type="file" id="fileInput" accept="image/*">
-    <div class="filename" id="filename">未選択</div>
-  </div>
 
-  <div class="panel">
-    <h2>2. 特徴色を抽出(15色)</h2>
-    <p class="hint">クリックで各色をパレットに入れる/外す(緑チェック=使用中)。</p>
-    <div class="row" style="margin-bottom:10px;">
-      <button id="extractBtn" disabled>画像から抽出しなおす</button>
-      <button id="savePaletteBtn">パレットを保存(.txt)</button>
-      <button id="loadPaletteBtn">パレットを読み込み(.txt)</button>
-      <input type="file" id="paletteFileInput" accept=".txt,text/plain" style="display:none;">
-    </div>
-    <div class="candidate-grid" id="candidateGrid"></div>
-  </div>
+    <div class="backdrop" id="backdrop" hidden></div>
 
-  <div class="panel">
-    <h2>3. サイズを選んでドット絵に変換</h2>
-    <div class="row size-btns" id="sizeBtns">
-      <button data-size="8" disabled>8×8</button>
-      <button data-size="16" disabled>16×16</button>
-      <button data-size="32" disabled class="active">32×32</button>
-      <button data-size="64" disabled>64×64</button>
-    </div>
-  </div>
-
-  <div class="panel" style="padding:0; overflow:hidden;">
-    <div class="canvases" style="padding:16px;">
-      <div class="cv-box">
-        <span class="tag">元画像</span>
-        <div class="cv-inner"><canvas id="cvOrig"></canvas></div>
-        <div class="empty-msg" id="origEmpty">画像を読み込むとここに表示されます</div>
+    <div class="sheet" id="gearSheet" hidden>
+      <div class="close-sheet" id="closeGearSheet">×</div>
+      <h3>画像・抽出・サイズ</h3>
+      <div class="sheet-row">
+        <button id="pickImageBtn" class="gsbtn">🖼 画像を開く</button>
+        <span class="filename" id="filename">未選択</span>
       </div>
-      <div class="cv-box" id="editViewport">
-        <span class="tag">ドット絵(1本指=塗る/2本指=ズーム・移動)</span>
-        <div id="outTransformWrap">
-          <canvas id="cvOut"></canvas>
-          <canvas id="cvOutGrid" class="overlay"></canvas>
-        </div>
-        <div class="empty-msg" id="outEmpty">サイズを選ぶと変換されます</div>
+      <div class="sheet-row">
+        <button id="extractBtn" class="gsbtn" disabled>🎨 抽出しなおす</button>
+        <span class="lbl">サイズ</span>
+        <select id="sizeSelect" disabled>
+          <option value="8">8×8</option>
+          <option value="16">16×16</option>
+          <option value="32" selected>32×32</option>
+          <option value="64">64×64</option>
+        </select>
       </div>
+      <div class="candidate-grid" id="candidateGrid"></div>
+      <div class="hint-line">1本指=塗る/2本指=ズーム・移動/3本指=絵全体を移動。候補色をタップでパレットに追加・削除できます(緑チェック=使用中)。</div>
+      <div class="status-line" id="statusLine">画像未読み込み</div>
     </div>
-  </div>
 
-  <div class="panel">
-    <h2>4. 編集</h2>
-    <p class="hint">下(画面下部固定)の色をタップして選び、ドット絵側を1本指でタップ/ドラッグで塗ります。2本指のピンチ/ドラッグで拡大・移動。</p>
-    <div class="row">
-      <button id="downloadBtn" disabled>PNGをダウンロード</button>
-    </div>
-    <div class="status-line" id="statusLine">画像未読み込み</div>
-    <div id="downloadFallback" style="display:none; margin-top:14px;">
-      <p class="hint">自動ダウンロードが反応しない場合は、下の画像を<strong>長押し</strong>して「画像を保存」を選んでください。</p>
+    <div class="sheet" id="fallbackSheet" hidden>
+      <div class="close-sheet" id="closeFallbackSheet">×</div>
+      <h3>ダウンロード</h3>
+      <p class="hint-line" style="margin-bottom:0;">自動ダウンロードが反応しない場合は、下の画像を<strong>長押し</strong>して「画像を保存」を選んでください。</p>
       <img id="downloadPreviewImg" alt="ダウンロード用プレビュー">
     </div>
   </div>
 
-  <div class="panel">
-    <h2>5. 絵全体を移動(保存されるPNGの中身がズレます)</h2>
-    <p class="hint">ドット絵エリアを<strong>3本指</strong>でドラッグすると、絵そのものが平行移動します(表示のパンではなく、実際のピクセルデータが動きます)。はみ出た部分は透明になります。</p>
+  <div class="bottombar" id="bottombar">
+    <div class="paletterow" id="brushRow"></div>
+    <div class="bottombar-msg" id="bottombarMsg">画像を読み込むとここに色が並びます</div>
   </div>
 
-  <footer>
-    抽出: 出現頻度が高く、互いに離れた色を優先して15色ピックアップしています。<br>
-    変換: ニアレストネイバー(補間なし)でサイズ変更した直後に、各ドットを抽出した15色のうち一番近い色へスナップします。<br>
-    編集: ドラッグ中は変更セルだけを高速に塗り替えます。ストローク単位で戻す/進むが可能です。パレットの保存/読み込みはこのツール内(またはブラウザ)に保持されます。
-  </footer>
-</div>
-
-<div class="bottom-bar">
-  <div class="brush-row" id="brushRow"></div>
-  <div class="bottom-bar-actions">
-    <button id="undoBtn" disabled title="戻す">←</button>
-    <button id="redoBtn" disabled title="進む">→</button>
-  </div>
-</div>
+  <input type="file" id="fileInput" accept="image/*">
+  <input type="file" id="paletteFileInput" accept=".txt,text/plain">
 
 <script>
 (function(){
@@ -260,7 +241,7 @@
   let currentSize = 32;
   let currentZoom = 12;   // native draw resolution factor (fixed per size; NOT the pinch scale)
   let editImageData = null;   // the currently VISIBLE / exported size x size window
-  let bufferImageData = null; // larger backing canvas (size*BUFFER_MARGIN_MULT) that keeps
+  let bufferImageData = null; // larger backing canvas (size*BUFFER_MULT) that keeps
                                // pixels safe when the artwork is shifted out of view
   let bufferSize = 0;
   let viewOffsetX = 0, viewOffsetY = 0; // top-left of the visible window within the buffer
@@ -281,29 +262,34 @@
   let activeTouchMode = null; // null | 'paint' | 'pinch' | 'shift'
   const MIN_SCALE = 0.5, MAX_SCALE = 8;
 
-  const origCanvas = document.getElementById('cvOrig');
   const outCanvas = document.getElementById('cvOut');
   const outGridCanvas = document.getElementById('cvOutGrid');
   const editViewport = document.getElementById('editViewport');
   const outTransformWrap = document.getElementById('outTransformWrap');
-  const origEmpty = document.getElementById('origEmpty');
-  const outEmpty = document.getElementById('outEmpty');
+  const dropZone = document.getElementById('drop');
   const fileInput = document.getElementById('fileInput');
-  const drop = document.getElementById('drop');
   const filenameEl = document.getElementById('filename');
   const extractBtn = document.getElementById('extractBtn');
+  const pickImageBtn = document.getElementById('pickImageBtn');
   const savePaletteBtn = document.getElementById('savePaletteBtn');
   const loadPaletteBtn = document.getElementById('loadPaletteBtn');
   const paletteFileInput = document.getElementById('paletteFileInput');
   const candidateGrid = document.getElementById('candidateGrid');
-  const sizeBtns = document.querySelectorAll('#sizeBtns button');
+  const sizeSelect = document.getElementById('sizeSelect');
   const brushRowEl = document.getElementById('brushRow');
+  const bottombarEl = document.getElementById('bottombar');
+  const bottombarMsg = document.getElementById('bottombarMsg');
   const undoBtn = document.getElementById('undoBtn');
   const redoBtn = document.getElementById('redoBtn');
   const downloadBtn = document.getElementById('downloadBtn');
-  const downloadFallback = document.getElementById('downloadFallback');
   const downloadPreviewImg = document.getElementById('downloadPreviewImg');
   const statusLine = document.getElementById('statusLine');
+  const gearBtn = document.getElementById('gearBtn');
+  const gearSheet = document.getElementById('gearSheet');
+  const fallbackSheet = document.getElementById('fallbackSheet');
+  const backdrop = document.getElementById('backdrop');
+  const closeGearSheet = document.getElementById('closeGearSheet');
+  const closeFallbackSheet = document.getElementById('closeFallbackSheet');
 
   function hexToRgb(hex){
     hex = hex.replace('#','').trim();
@@ -315,6 +301,26 @@
     return '#' + [r,g,b].map(v=>v.toString(16).padStart(2,'0')).join('');
   }
   function normHex(h){ return h.toLowerCase(); }
+
+  // ---------------- sheet open/close (only one visible at a time) ----------------
+  function openSheet(sheetEl){
+    gearSheet.hidden = sheetEl !== gearSheet;
+    fallbackSheet.hidden = sheetEl !== fallbackSheet;
+    backdrop.hidden = false;
+    gearBtn.classList.toggle('on', sheetEl === gearSheet);
+  }
+  function closeSheets(){
+    gearSheet.hidden = true;
+    fallbackSheet.hidden = true;
+    backdrop.hidden = true;
+    gearBtn.classList.remove('on');
+  }
+  gearBtn.addEventListener('click', ()=>{
+    if(!gearSheet.hidden){ closeSheets(); } else { openSheet(gearSheet); }
+  });
+  closeGearSheet.addEventListener('click', closeSheets);
+  closeFallbackSheet.addEventListener('click', closeSheets);
+  backdrop.addEventListener('click', closeSheets);
 
   // Image canvas + grid canvas are always drawn at the SAME native resolution
   // (size * currentZoom) with no independent CSS scaling on either -- this is
@@ -360,7 +366,6 @@
 
   function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
 
-  // Copies `src` into `buffer` at (offsetX, offsetY), row by row.
   function copyIntoBuffer(buffer, src, offsetX, offsetY){
     const bw = buffer.width;
     const bd = buffer.data;
@@ -373,7 +378,6 @@
     }
   }
 
-  // Extracts a size x size window out of `buffer` starting at (offsetX, offsetY).
   function extractWindow(buffer, offsetX, offsetY, size){
     const out = new Uint8ClampedArray(size*size*4);
     const bw = buffer.width;
@@ -386,9 +390,6 @@
     return new ImageData(out, size, size);
   }
 
-  // A combined undo/redo snapshot captures BOTH the backing buffer and which
-  // window into it is currently visible, so undo correctly reverts paint
-  // strokes and 3-finger shifts alike.
   function takeSnapshot(){
     return { buffer: cloneImageData(bufferImageData), offsetX: viewOffsetX, offsetY: viewOffsetY };
   }
@@ -431,8 +432,6 @@
       startScale: pinchScale,
       originLeft: rect.left,
       originTop: rect.top,
-      // content-space point currently under the pinch midpoint -- kept fixed
-      // under the fingers as the gesture continues (standard pinch-zoom math)
       P0x: (mid.x - rect.left - panX) / pinchScale,
       P0y: (mid.y - rect.top - panY) / pinchScale,
     };
@@ -496,7 +495,8 @@
     palette = candidateColors.map(c => rgbToHex(c.r,c.g,c.b));
     renderCandidateGrid();
     renderBrushRow();
-    updateSizeBtnsEnabled();
+    updateSizeSelectEnabled();
+    maybeReconvert();
   }
   extractBtn.addEventListener('click', runExtract);
 
@@ -508,7 +508,8 @@
     palette = cleaned;
     renderCandidateGrid();
     renderBrushRow();
-    updateSizeBtnsEnabled();
+    updateSizeSelectEnabled();
+    maybeReconvert();
     showStatus('パレットを読み込みました(' + palette.length + '色)', false);
   }
 
@@ -517,16 +518,14 @@
     statusLine.style.color = isError ? 'var(--danger)' : '';
   }
 
-  // Palette save/load are real files (.txt, one HEX code per line) -- uses the
-  // exact same download path (downloadBlob/isStandaloneMode, defined below)
-  // as the PNG export, so it's just as reliable across environments.
   savePaletteBtn.addEventListener('click', async ()=>{
-    if(!palette.length){ showStatus('保存するパレットがありません。', true); return; }
+    if(!palette.length){ showStatus('保存するパレットがありません。', true); openSheet(gearSheet); return; }
     const blob = new Blob([palette.join('\n')], {type:'text/plain'});
     try{
       await downloadBlob(blob, 'palette.txt');
     } catch(e){
       showStatus('保存に失敗しました。', true);
+      openSheet(gearSheet);
     }
   });
 
@@ -536,7 +535,7 @@
 
   paletteFileInput.addEventListener('change', (e)=>{
     const file = e.target.files[0];
-    paletteFileInput.value = ''; // allow re-selecting the same file next time
+    paletteFileInput.value = '';
     if(!file) return;
     const reader = new FileReader();
     reader.onload = (ev)=>{
@@ -544,9 +543,10 @@
         applyLoadedPalette(ev.target.result);
       } catch(err){
         showStatus('読み込みに失敗しました。ファイルの中身を確認してください。', true);
+        openSheet(gearSheet);
       }
     };
-    reader.onerror = ()=> showStatus('ファイルの読み込みに失敗しました。', true);
+    reader.onerror = ()=>{ showStatus('ファイルの読み込みに失敗しました。', true); openSheet(gearSheet); };
     reader.readAsText(file);
   });
 
@@ -558,35 +558,47 @@
       const item = document.createElement('div');
       item.className = 'candidate' + (paletteSet.has(normHex(hex)) ? ' added' : '');
       item.title = hex;
-      item.innerHTML = `<div class="cbox" style="background:${hex};"><div class="check">✓</div></div><div class="pct">${c.pct.toFixed(1)}%</div>`;
+      item.innerHTML = `<div class="cbox" style="background:${hex};"><div class="check">✓</div></div>`;
       item.addEventListener('click', ()=>{
         const idx = palette.findIndex(p => normHex(p) === normHex(hex));
         if(idx >= 0) palette.splice(idx,1);
         else palette.push(hex);
         renderCandidateGrid();
         renderBrushRow();
-        updateSizeBtnsEnabled();
+        updateSizeSelectEnabled();
+        maybeReconvert();
       });
       candidateGrid.appendChild(item);
     });
   }
 
-  function updateSizeBtnsEnabled(){
+  function updateSizeSelectEnabled(){
     const ok = !!loadedImage && palette.length > 0;
-    sizeBtns.forEach(b => b.disabled = !ok);
+    sizeSelect.disabled = !ok;
+  }
+
+  // Convert automatically whenever the image/palette state can support it --
+  // removes the need for an explicit "convert" tap after extraction or after
+  // toggling a candidate color.
+  function maybeReconvert(){
+    if(loadedImage && palette.length > 0){
+      convert(currentSize);
+    }
   }
 
   // ---------------- file loading ----------------
-  drop.addEventListener('click', ()=> fileInput.click());
-  drop.addEventListener('dragover', (e)=>{ e.preventDefault(); drop.classList.add('drag'); });
-  drop.addEventListener('dragleave', ()=> drop.classList.remove('drag'));
-  drop.addEventListener('drop', (e)=>{
+  dropZone.addEventListener('click', ()=> fileInput.click());
+  pickImageBtn.addEventListener('click', ()=> fileInput.click());
+  dropZone.addEventListener('dragover', (e)=>{ e.preventDefault(); dropZone.classList.add('drag'); });
+  dropZone.addEventListener('dragleave', ()=> dropZone.classList.remove('drag'));
+  dropZone.addEventListener('drop', (e)=>{
     e.preventDefault();
-    drop.classList.remove('drag');
+    dropZone.classList.remove('drag');
     if(e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
   });
   fileInput.addEventListener('change', (e)=>{
     if(e.target.files.length) loadFile(e.target.files[0]);
+    fileInput.value = '';
   });
 
   function loadFile(file){
@@ -597,27 +609,19 @@
       img.onload = ()=>{
         loadedImage = img;
 
-        origCanvas.width = img.width;
-        origCanvas.height = img.height;
-        const octx = origCanvas.getContext('2d');
-        octx.imageSmoothingEnabled = false;
-        octx.drawImage(img, 0, 0);
-        origEmpty.style.display = 'none';
-
         outCanvas.getContext('2d').clearRect(0,0,outCanvas.width,outCanvas.height);
         outGridCanvas.getContext('2d').clearRect(0,0,outGridCanvas.width,outGridCanvas.height);
-        outEmpty.style.display = 'block';
         editImageData = null;
         bufferImageData = null; bufferSize = 0; viewOffsetX = 0; viewOffsetY = 0;
         undoStack = []; redoStack = [];
         undoBtn.disabled = true; redoBtn.disabled = true;
         downloadBtn.disabled = true;
-        downloadFallback.style.display = 'none';
         statusLine.textContent = '抽出中...';
 
         extractBtn.disabled = false;
         runExtract();
-        statusLine.textContent = '色を抽出しました。サイズを選んでください';
+        statusLine.textContent = '色を抽出して変換しました';
+        dropZone.style.display = 'none';
       };
       img.src = ev.target.result;
     };
@@ -625,12 +629,9 @@
   }
 
   // ---------------- size -> convert ----------------
-  sizeBtns.forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      currentSize = parseInt(btn.dataset.size, 10);
-      sizeBtns.forEach(b => b.classList.toggle('active', b === btn));
-      convert(currentSize);
-    });
+  sizeSelect.addEventListener('change', ()=>{
+    currentSize = parseInt(sizeSelect.value, 10);
+    convert(currentSize);
   });
 
   function zoomFor(size){
@@ -662,9 +663,6 @@
       d[i]=nr; d[i+1]=ng; d[i+2]=nb; d[i+3]=255;
     }
 
-    // Set up a backing buffer 3x the visible size (1x margin on every side) so
-    // that 3-finger shifting never has to delete pixels -- it just moves which
-    // window into this buffer is currently visible/exported.
     bufferSize = size * BUFFER_MULT;
     bufferImageData = new ImageData(bufferSize, bufferSize); // fully transparent
     viewOffsetX = size; viewOffsetY = size; // center window = margin of `size` on each side
@@ -674,13 +672,12 @@
     currentZoom = zoomFor(size);
     drawScaledImage(outCanvas, editImageData, currentZoom);
     drawGrid(outGridCanvas, size, size, currentZoom);
-    outEmpty.style.display = 'none';
+    dropZone.style.display = 'none';
     centerContent();
 
     undoStack = []; redoStack = [];
     undoBtn.disabled = true; redoBtn.disabled = true;
     downloadBtn.disabled = false;
-    downloadFallback.style.display = 'none';
     if(!brushColor && palette.length) brushColor = palette[0];
     renderBrushRow();
     statusLine.textContent = size + '×' + size + ' に変換しました(' + palette.length + '色)';
@@ -710,13 +707,12 @@
       renderBrushRow();
     });
     brushRowEl.appendChild(eraserEl);
+    bottombarEl.classList.toggle('empty', palette.length === 0);
+    bottombarMsg.style.display = palette.length === 0 ? 'flex' : 'none';
   }
 
   // ---------------- painting (shared by mouse + 1-finger touch) ----------------
   function canvasToPixel(e, canvas, zoom){
-    // getBoundingClientRect() reflects the canvas's FINAL on-screen box, including
-    // any ancestor CSS transform (pinch/pan) -- so this ratio-based conversion
-    // stays correct no matter how the content is currently zoomed/panned.
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
@@ -746,8 +742,6 @@
     }
     d[idx]=nr; d[idx+1]=ng; d[idx+2]=nb; d[idx+3]=na;
 
-    // mirror the same write into the backing buffer, so it's preserved even
-    // after the visible window is shifted elsewhere
     if(bufferImageData){
       const bw = bufferImageData.width;
       const bIdx = ((viewOffsetY+py)*bw + (viewOffsetX+px)) * 4;
@@ -755,8 +749,6 @@
       bd[bIdx]=nr; bd[bIdx+1]=ng; bd[bIdx+2]=nb; bd[bIdx+3]=na;
     }
 
-    // repaint only the touched cell -- cheap, and stays in the same coordinate
-    // space as the grid (no full-canvas redraw needed while dragging)
     const ctx = outCanvas.getContext('2d');
     if(na === 0){
       ctx.clearRect(px*currentZoom, py*currentZoom, currentZoom, currentZoom);
@@ -764,7 +756,6 @@
       ctx.fillStyle = brushColor;
       ctx.fillRect(px*currentZoom, py*currentZoom, currentZoom, currentZoom);
     }
-    statusLine.textContent = `(${px}, ${py}) を塗りました`;
   }
 
   function beginStroke(e){
@@ -785,6 +776,7 @@
 
   // touch: 1 finger = paint, 2 fingers = pinch-zoom + pan, 3 fingers = move the artwork itself
   editViewport.addEventListener('touchstart', (e)=>{
+    if(!gearSheet.hidden || !fallbackSheet.hidden) return; // ignore canvas gestures while a sheet is open
     if(e.touches.length >= 3){
       e.preventDefault();
       isPainting = false;
@@ -823,8 +815,6 @@
       pinchGesture = null;
       shiftGesture = null;
     }
-    // if fewer fingers remain mid-gesture, stay in the current mode until fully
-    // released so a lifted finger can't accidentally start a different gesture.
   }
   window.addEventListener('touchend', endAllTouch);
   window.addEventListener('touchcancel', endAllTouch);
@@ -848,7 +838,6 @@
       baseOffsetX: viewOffsetX, baseOffsetY: viewOffsetY,
       appliedDX: 0, appliedDY: 0
     };
-    statusLine.textContent = '3本指で絵を移動中...';
   }
 
   function updateShiftGesture(touches){
@@ -856,20 +845,16 @@
     const c = touchCentroid(touches);
     const screenDX = c.x - shiftGesture.startX;
     const screenDY = c.y - shiftGesture.startY;
-    const scalePxPerNative = currentZoom * pinchScale; // on-screen px per native pixel, right now
+    const scalePxPerNative = currentZoom * pinchScale;
     const dx = Math.round(screenDX / scalePxPerNative);
     const dy = Math.round(screenDY / scalePxPerNative);
     if(dx !== shiftGesture.appliedDX || dy !== shiftGesture.appliedDY){
-      // moving content right by dx == sliding the visible WINDOW left by dx
-      // within the (larger) buffer -- nothing is ever deleted, we just look
-      // at a different part of the same backing canvas.
       const maxOffset = bufferSize - currentSize;
       viewOffsetX = clamp(shiftGesture.baseOffsetX - dx, 0, maxOffset);
       viewOffsetY = clamp(shiftGesture.baseOffsetY - dy, 0, maxOffset);
       editImageData = extractWindow(bufferImageData, viewOffsetX, viewOffsetY, currentSize);
       drawScaledImage(outCanvas, editImageData, currentZoom);
       shiftGesture.appliedDX = dx; shiftGesture.appliedDY = dy;
-      statusLine.textContent = `絵全体を (${dx}, ${dy}) 移動中`;
     }
   }
 
@@ -900,7 +885,6 @@
 
   async function downloadBlob(blob, filename){
     if(isStandaloneMode()){
-      // スタンドアロン表示時: まずWeb Share APIで共有シートを呼び出す
       try{
         const file = new File([blob], filename, {type: blob.type || 'image/png'});
         if(navigator.canShare && navigator.canShare({files:[file]})){
@@ -909,18 +893,14 @@
           return true;
         }
       } catch(err){
-        if(err && err.name === 'AbortError'){ return true; } // ユーザーが共有をキャンセル
-        // それ以外のエラーは下のフォールバックへ
+        if(err && err.name === 'AbortError'){ return true; }
       }
-      // Web Share APIが使えない/失敗した場合: 新しいタブで開く
       const url = URL.createObjectURL(blob);
       window.open(url, '_blank');
       setTimeout(()=> URL.revokeObjectURL(url), 60000);
       showStatus(`「${filename}」を新しいタブで開きました。保存できない場合は画面を長押しして保存してください`, false);
       return true;
     }
-    // 通常のブラウザタブ表示: 素直に<a download>を試す(成功したかは分からないので
-    // ここではメッセージを出さず、呼び出し側の汎用メッセージに任せる)
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = filename;
@@ -945,11 +925,8 @@
       }
     } catch(e){ /* ignore -- the long-press fallback below still works */ }
 
-    // Always also show a long-press-to-save image regardless of the above,
-    // since it uses the OS's native "Save Image" menu directly and doesn't
-    // depend on any browser download/share machinery at all.
     downloadPreviewImg.src = dataUrl;
-    downloadFallback.style.display = 'block';
+    openSheet(fallbackSheet);
     if(!messageShown){
       showStatus('自動ダウンロードが効かない場合は、下の画像を長押しして保存してください', false);
     }
@@ -958,6 +935,8 @@
   window.addEventListener('resize', ()=>{
     if(editImageData) centerContent();
   });
+
+  renderBrushRow();
 })();
 </script>
 </body>
