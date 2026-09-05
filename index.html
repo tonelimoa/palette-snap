@@ -270,6 +270,14 @@
   let activeTouchMode = null; // null | 'paint' | 'pinch' | 'shift'
   const MIN_SCALE = 0.5, MAX_SCALE = 8;
 
+  // 1本指で描画を始めた直後に2本目/3本目の指が触れた場合、それが誤って打った
+  // 1点だけを自動的になかったことにしてズーム/移動へ切り替えるための状態。
+  // (「まだ動かしていない」かつ「触れてから短時間」の場合のみキャンセルする)
+  let paintStartTime = 0;
+  let paintMoved = false;
+  let pendingCancelSnapshot = null;
+  const MULTI_TOUCH_GRACE_MS = 150;
+
   const outCanvas = document.getElementById('cvOut');
   const outGridCanvas = document.getElementById('cvOutGrid');
   const editViewport = document.getElementById('editViewport');
@@ -787,13 +795,35 @@
 
   function beginStroke(e){
     if(!editImageData || !bufferImageData) return;
-    undoStack.push(takeSnapshot());
+    const snap = takeSnapshot();
+    undoStack.push(snap);
     if(undoStack.length > 50) undoStack.shift();
     redoStack = [];
     undoBtn.disabled = false;
     redoBtn.disabled = true;
     isPainting = true;
+    // remember this snapshot so a same-instant 2nd/3rd finger touch can
+    // silently undo this stroke before it ever shows up in undo history
+    paintStartTime = performance.now();
+    paintMoved = false;
+    pendingCancelSnapshot = snap;
     paintAt(e);
+  }
+
+  // If the finger currently painting hasn't moved yet and started less than
+  // MULTI_TOUCH_GRACE_MS ago, treat whatever it just painted as accidental
+  // (caused by a 2nd/3rd finger landing a beat later for zoom/move) and
+  // silently revert it -- it never shows up in the undo stack.
+  function cancelAccidentalPaint(){
+    if(activeTouchMode === 'paint' && pendingCancelSnapshot && !paintMoved &&
+       (performance.now() - paintStartTime) < MULTI_TOUCH_GRACE_MS){
+      if(undoStack[undoStack.length - 1] === pendingCancelSnapshot) undoStack.pop();
+      restoreSnapshot(pendingCancelSnapshot);
+      undoBtn.disabled = undoStack.length === 0;
+      redoBtn.disabled = true;
+    }
+    pendingCancelSnapshot = null;
+    isPainting = false;
   }
 
   // mouse (desktop) -- unaffected by pinch/pan, no gesture ambiguity
@@ -806,12 +836,12 @@
     if(!gearSheet.hidden || !fallbackSheet.hidden) return; // ignore canvas gestures while a sheet is open
     if(e.touches.length >= 3){
       e.preventDefault();
-      isPainting = false;
+      cancelAccidentalPaint();
       activeTouchMode = 'shift';
       beginShiftGesture(e.touches);
     } else if(e.touches.length === 2 && activeTouchMode !== 'shift'){
       e.preventDefault();
-      isPainting = false;
+      cancelAccidentalPaint();
       activeTouchMode = 'pinch';
       beginPinch(e.touches[0], e.touches[1]);
     } else if(e.touches.length === 1 && activeTouchMode !== 'pinch' && activeTouchMode !== 'shift'){
@@ -831,6 +861,7 @@
       updatePinch(e.touches[0], e.touches[1]);
     } else if(activeTouchMode === 'paint' && isPainting && e.touches.length === 1){
       e.preventDefault();
+      paintMoved = true;
       paintAt(e);
     }
   }, {passive:false});
@@ -841,6 +872,7 @@
       isPainting = false;
       pinchGesture = null;
       shiftGesture = null;
+      pendingCancelSnapshot = null;
     }
   }
   window.addEventListener('touchend', endAllTouch);
