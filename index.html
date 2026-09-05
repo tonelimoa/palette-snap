@@ -72,12 +72,18 @@
   #outTransformWrap canvas.overlay{ position:absolute; top:0; left:0; pointer-events:none; }
 
   .drop{
-    position:absolute; inset: 0; display:flex; flex-direction:column; align-items:center; justify-content:center;
-    gap:10px; cursor:pointer; padding: 20px;
+    position:absolute; inset: 0; display:flex; align-items:center; justify-content:center;
+    cursor:pointer; padding: 24px;
   }
-  .drop .big{ font-size: 34px; }
-  .drop p{ margin:0; font-size:13px; color: var(--ink-dim); text-align:center; max-width:26ch; line-height:1.7; }
-  .drop.drag{ background: rgba(242,98,5,0.08); }
+  .dropframe{
+    width:100%; max-width: 300px; padding: 30px 18px;
+    border: 2px dashed var(--accent-2); border-radius: 14px;
+    background: rgba(36,31,74,0.35);
+    display:flex; flex-direction:column; align-items:center; gap:10px;
+  }
+  .dropframe .big{ font-size: 34px; }
+  .dropframe p{ margin:0; font-size:13px; color: var(--ink-dim); text-align:center; max-width:26ch; line-height:1.7; }
+  .drop.drag .dropframe{ border-color: var(--accent); background: rgba(242,98,5,0.12); }
 
   /* ---------------- slide-up sheets (settings / download fallback) ---------------- */
   .backdrop{
@@ -191,8 +197,10 @@
     </div>
 
     <div class="drop" id="drop">
-      <div class="big">📁</div>
-      <p>クリックまたはドラッグ&ドロップで画像を読み込み<br>→ 自動で15色抽出してドット絵に変換します</p>
+      <div class="dropframe">
+        <div class="big">📁</div>
+        <p>クリックまたはドラッグ&ドロップで画像を読み込み<br>→ 自動で15色抽出してドット絵に変換します</p>
+      </div>
     </div>
 
     <div class="backdrop" id="backdrop" hidden></div>
@@ -346,16 +354,35 @@
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if(zoom < 4) return;
-    ctx.strokeStyle = 'rgba(140,130,180,0.4)';
+
+    // thin line every cell (skip the ones that fall on an 8-cell boundary --
+    // those are drawn thicker below)
+    ctx.strokeStyle = 'rgba(140,130,180,0.35)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     for(let x=0; x<=w; x++){
+      if(x % 8 === 0) continue;
       ctx.moveTo(x*zoom + 0.5, 0);
       ctx.lineTo(x*zoom + 0.5, h*zoom);
     }
     for(let y=0; y<=h; y++){
+      if(y % 8 === 0) continue;
       ctx.moveTo(0, y*zoom + 0.5);
       ctx.lineTo(w*zoom, y*zoom + 0.5);
+    }
+    ctx.stroke();
+
+    // thicker line every 8 cells
+    ctx.strokeStyle = 'rgba(205,196,232,0.8)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for(let x=0; x<=w; x+=8){
+      ctx.moveTo(x*zoom, 0);
+      ctx.lineTo(x*zoom, h*zoom);
+    }
+    for(let y=0; y<=h; y+=8){
+      ctx.moveTo(0, y*zoom);
+      ctx.lineTo(w*zoom, y*zoom);
     }
     ctx.stroke();
   }
