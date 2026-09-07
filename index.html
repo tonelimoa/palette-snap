@@ -216,10 +216,11 @@
         <button id="extractBtn" class="gsbtn" disabled>🎨 抽出しなおす</button>
         <span class="lbl">サイズ</span>
         <select id="sizeSelect" disabled>
-          <option value="8">8×8</option>
-          <option value="16">16×16</option>
-          <option value="32" selected>32×32</option>
-          <option value="64">64×64</option>
+          <option value="8x8">8×8</option>
+          <option value="16x16">16×16</option>
+          <option value="32x32" selected>32×32</option>
+          <option value="64x64">64×64</option>
+          <option value="16x32">16×32(縦長)</option>
         </select>
       </div>
       <div class="candidate-grid" id="candidateGrid"></div>
@@ -246,12 +247,12 @@
 <script>
 (function(){
   let loadedImage = null;
-  let currentSize = 32;
+  let currentW = 32, currentH = 32; // grid can be non-square now (e.g. 16x32)
   let currentZoom = 12;   // native draw resolution factor (fixed per size; NOT the pinch scale)
-  let editImageData = null;   // the currently VISIBLE / exported size x size window
-  let bufferImageData = null; // larger backing canvas (size*BUFFER_MULT) that keeps
+  let editImageData = null;   // the currently VISIBLE / exported currentW x currentH window
+  let bufferImageData = null; // larger backing canvas ((w|h)*BUFFER_MULT) that keeps
                                // pixels safe when the artwork is shifted out of view
-  let bufferSize = 0;
+  let bufferW = 0, bufferH = 0;
   let viewOffsetX = 0, viewOffsetY = 0; // top-left of the visible window within the buffer
   const BUFFER_MULT = 3; // buffer is 3x the visible size -> 1x margin on every side
   let candidateColors = []; // [{r,g,b,pct}]
@@ -413,16 +414,16 @@
     }
   }
 
-  function extractWindow(buffer, offsetX, offsetY, size){
-    const out = new Uint8ClampedArray(size*size*4);
+  function extractWindow(buffer, offsetX, offsetY, w, h){
+    const out = new Uint8ClampedArray(w*h*4);
     const bw = buffer.width;
     const bd = buffer.data;
-    for(let y=0; y<size; y++){
+    for(let y=0; y<h; y++){
       const srcStart = ((offsetY+y)*bw + offsetX) * 4;
-      const dstStart = (y*size) * 4;
-      out.set(bd.subarray(srcStart, srcStart + size*4), dstStart);
+      const dstStart = (y*w) * 4;
+      out.set(bd.subarray(srcStart, srcStart + w*4), dstStart);
     }
-    return new ImageData(out, size, size);
+    return new ImageData(out, w, h);
   }
 
   function takeSnapshot(){
@@ -432,7 +433,7 @@
     bufferImageData = snap.buffer;
     viewOffsetX = snap.offsetX;
     viewOffsetY = snap.offsetY;
-    editImageData = extractWindow(bufferImageData, viewOffsetX, viewOffsetY, currentSize);
+    editImageData = extractWindow(bufferImageData, viewOffsetX, viewOffsetY, currentW, currentH);
     drawScaledImage(outCanvas, editImageData, currentZoom);
   }
 
@@ -443,8 +444,8 @@
 
   function centerContent(){
     const vpRect = editViewport.getBoundingClientRect();
-    const contentW = currentSize * currentZoom;
-    const contentH = currentSize * currentZoom;
+    const contentW = currentW * currentZoom;
+    const contentH = currentH * currentZoom;
     pinchScale = 1;
     panX = (vpRect.width - contentW) / 2;
     panY = (vpRect.height - contentH) / 2;
@@ -617,7 +618,7 @@
   // toggling a candidate color.
   function maybeReconvert(){
     if(loadedImage && palette.length > 0){
-      convert(currentSize);
+      convert(currentW, currentH);
     }
   }
 
@@ -647,7 +648,7 @@
         outCanvas.getContext('2d').clearRect(0,0,outCanvas.width,outCanvas.height);
         outGridCanvas.getContext('2d').clearRect(0,0,outGridCanvas.width,outGridCanvas.height);
         editImageData = null;
-        bufferImageData = null; bufferSize = 0; viewOffsetX = 0; viewOffsetY = 0;
+        bufferImageData = null; bufferW = 0; bufferH = 0; viewOffsetX = 0; viewOffsetY = 0;
         undoStack = []; redoStack = [];
         undoBtn.disabled = true; redoBtn.disabled = true;
         downloadBtn.disabled = true;
@@ -664,23 +665,27 @@
   }
 
   // ---------------- size -> convert ----------------
+  // select values are "WxH" (e.g. "32x32", "16x32") so non-square grids work the same way
   sizeSelect.addEventListener('change', ()=>{
-    currentSize = parseInt(sizeSelect.value, 10);
-    convert(currentSize);
+    const [w, h] = sizeSelect.value.split('x').map(n => parseInt(n, 10));
+    currentW = w; currentH = h;
+    convert(currentW, currentH);
   });
 
-  function zoomFor(size){
-    return Math.max(4, Math.min(40, Math.round(384 / size)));
+  function zoomFor(w, h){
+    // fit within the same on-screen budget regardless of orientation --
+    // base the zoom on whichever dimension is larger
+    return Math.max(4, Math.min(40, Math.round(384 / Math.max(w, h))));
   }
 
-  function convert(size){
+  function convert(w, h){
     if(!loadedImage || !palette.length) return;
     const resized = document.createElement('canvas');
-    resized.width = size; resized.height = size;
+    resized.width = w; resized.height = h;
     const rctx = resized.getContext('2d');
     rctx.imageSmoothingEnabled = false;
-    rctx.drawImage(loadedImage, 0, 0, size, size);
-    const raw = rctx.getImageData(0, 0, size, size);
+    rctx.drawImage(loadedImage, 0, 0, w, h);
+    const raw = rctx.getImageData(0, 0, w, h);
 
     const paletteRgb = palette.map(hexToRgb);
     const d = raw.data;
@@ -698,15 +703,17 @@
       d[i]=nr; d[i+1]=ng; d[i+2]=nb; d[i+3]=255;
     }
 
-    bufferSize = size * BUFFER_MULT;
-    bufferImageData = new ImageData(bufferSize, bufferSize); // fully transparent
-    viewOffsetX = size; viewOffsetY = size; // center window = margin of `size` on each side
+    bufferW = w * BUFFER_MULT;
+    bufferH = h * BUFFER_MULT;
+    bufferImageData = new ImageData(bufferW, bufferH); // fully transparent
+    viewOffsetX = w; viewOffsetY = h; // center window = margin of w/h on each side
     copyIntoBuffer(bufferImageData, raw, viewOffsetX, viewOffsetY);
 
     editImageData = raw;
-    currentZoom = zoomFor(size);
+    currentW = w; currentH = h;
+    currentZoom = zoomFor(w, h);
     drawScaledImage(outCanvas, editImageData, currentZoom);
-    drawGrid(outGridCanvas, size, size, currentZoom);
+    drawGrid(outGridCanvas, w, h, currentZoom);
     dropZone.style.display = 'none';
     centerContent();
 
@@ -715,7 +722,7 @@
     downloadBtn.disabled = false;
     if(!brushColor && palette.length) brushColor = palette[0];
     renderBrushRow();
-    statusLine.textContent = size + '×' + size + ' に変換しました(' + palette.length + '色)';
+    statusLine.textContent = w + '×' + h + ' に変換しました(' + palette.length + '色)';
   }
 
   // ---------------- brush row ----------------
@@ -908,10 +915,11 @@
     const dx = Math.round(screenDX / scalePxPerNative);
     const dy = Math.round(screenDY / scalePxPerNative);
     if(dx !== shiftGesture.appliedDX || dy !== shiftGesture.appliedDY){
-      const maxOffset = bufferSize - currentSize;
-      viewOffsetX = clamp(shiftGesture.baseOffsetX - dx, 0, maxOffset);
-      viewOffsetY = clamp(shiftGesture.baseOffsetY - dy, 0, maxOffset);
-      editImageData = extractWindow(bufferImageData, viewOffsetX, viewOffsetY, currentSize);
+      const maxOffsetX = bufferW - currentW;
+      const maxOffsetY = bufferH - currentH;
+      viewOffsetX = clamp(shiftGesture.baseOffsetX - dx, 0, maxOffsetX);
+      viewOffsetY = clamp(shiftGesture.baseOffsetY - dy, 0, maxOffsetY);
+      editImageData = extractWindow(bufferImageData, viewOffsetX, viewOffsetY, currentW, currentH);
       drawScaledImage(outCanvas, editImageData, currentZoom);
       shiftGesture.appliedDX = dx; shiftGesture.appliedDY = dy;
     }
@@ -973,7 +981,7 @@
     const tmp = document.createElement('canvas');
     tmp.width = editImageData.width; tmp.height = editImageData.height;
     tmp.getContext('2d').putImageData(editImageData, 0, 0);
-    const filename = `dotart_${currentSize}x${currentSize}.png`;
+    const filename = `dotart_${currentW}x${currentH}.png`;
     const dataUrl = tmp.toDataURL('image/png');
 
     let messageShown = false;
