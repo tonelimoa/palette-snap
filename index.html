@@ -43,7 +43,9 @@
     padding: 0 10px; padding-top: env(safe-area-inset-top, 0px);
     background: var(--panel); border-bottom:1px solid var(--line);
     position:relative; z-index: 30;
+    overflow-x:auto; -webkit-overflow-scrolling:touch;
   }
+  .ibtn.small-label{ font-size:12px; font-weight:700; }
   .grp{ display:flex; gap:7px; }
   .ibtn{
     width:36px; height:36px; border:1px solid var(--line); background:var(--panel-2);
@@ -97,6 +99,12 @@
   .drop.locked .dropframe{ border-color: var(--line); background: rgba(28,26,58,0.35); opacity:0.7; }
 
   /* ---------------- slide-up sheets (settings / download fallback) ---------------- */
+  .insert-hint{
+    position:absolute; top:8px; left:50%; transform:translateX(-50%);
+    background: rgba(20,16,40,0.9); color: var(--accent-2); font-size:11px;
+    padding:6px 12px; border-radius:20px; border:1px solid var(--accent-2);
+    pointer-events:none; z-index: 12; white-space:nowrap;
+  }
   .backdrop{
     position:absolute; inset:0; background: rgba(5,4,10,0.45); z-index:15;
   }
@@ -196,6 +204,9 @@
     </div>
     <div class="grp">
       <button id="gearBtn" class="ibtn" title="画像・抽出・サイズ">⚙</button>
+      <button id="refToggleBtn" class="ibtn" title="参考画像を表示/非表示" disabled>🖼</button>
+      <button id="addRowBtn" class="ibtn small-label" title="タップした位置に透明な行を1行挿入" disabled>行+</button>
+      <button id="addColBtn" class="ibtn small-label" title="タップした位置に透明な列を1列挿入" disabled>列+</button>
       <button id="savePaletteBtn" class="ibtn accent" title="パレットを保存">💾</button>
       <button id="loadPaletteBtn" class="ibtn accent" title="パレットを読み込み">📂</button>
       <button id="downloadBtn" class="ibtn accent" title="PNGをダウンロード" disabled>⬇</button>
@@ -215,6 +226,8 @@
         <p id="dropText">クリックまたはドラッグ&ドロップで画像を読み込み<br>→ 設定したパレットの色に変換します</p>
       </div>
     </div>
+
+    <div class="insert-hint" id="insertHint" hidden></div>
 
     <div class="backdrop" id="backdrop" hidden></div>
 
@@ -236,9 +249,6 @@
           <option value="64x64">64×64</option>
           <option value="16x32">16×32(縦長)</option>
         </select>
-      </div>
-      <div class="sheet-row">
-        <button id="refToggleBtn" class="gsbtn" disabled>🖼 参考画像を表示</button>
       </div>
       <div class="candidate-grid" id="candidateGrid"></div>
       <div class="hint-line">1本指=塗る/2本指=ズーム・移動/3本指=絵全体を移動。候補色をタップでパレットに追加・削除できます(緑チェック=使用中)。</div>
@@ -297,6 +307,11 @@
   let pinchGesture = null;
   let shiftGesture = null;
   let activeTouchMode = null; // null | 'paint' | 'pinch' | 'shift'
+  // "+行"/"+列" ボタンで武装(armed)した後、次にキャンバスをタップした位置に
+  // 透明な行/列を挿入する。サイズ(currentW/currentH)は変えず、バッファの
+  // 反対側の端が1つ分押し出されて消える(バッファはBUFFER_MULT倍の余白を
+  // 持っているため、実際に切り捨てられることは通常ない)。
+  let insertMode = null; // null | 'row' | 'col'
   const MIN_SCALE = 0.5, MAX_SCALE = 8;
 
   // 1本指で描画を始めた直後に2本目/3本目の指が触れた場合、それが誤って打った
@@ -324,6 +339,9 @@
   const candidateGrid = document.getElementById('candidateGrid');
   const sizeSelect = document.getElementById('sizeSelect');
   const refToggleBtn = document.getElementById('refToggleBtn');
+  const addRowBtn = document.getElementById('addRowBtn');
+  const addColBtn = document.getElementById('addColBtn');
+  const insertHint = document.getElementById('insertHint');
   const brushRowEl = document.getElementById('brushRow');
   const bottombarEl = document.getElementById('bottombar');
   const bottombarMsg = document.getElementById('bottombarMsg');
@@ -364,7 +382,7 @@
     gearBtn.classList.remove('on');
   }
   gearBtn.addEventListener('click', ()=>{
-    if(!gearSheet.hidden){ closeSheets(); } else { openSheet(gearSheet); }
+    if(!gearSheet.hidden){ closeSheets(); } else { setInsertMode(null); openSheet(gearSheet); }
   });
   closeGearSheet.addEventListener('click', closeSheets);
   closeFallbackSheet.addEventListener('click', closeSheets);
@@ -808,6 +826,8 @@
         undoBtn.disabled = true; redoBtn.disabled = true;
         downloadBtn.disabled = true;
         refToggleBtn.disabled = true;
+        addRowBtn.disabled = true; addColBtn.disabled = true;
+        setInsertMode(null);
         statusLine.textContent = '抽出中...';
 
         extractBtn.disabled = false;
@@ -831,9 +851,98 @@
   refToggleBtn.addEventListener('click', ()=>{
     showReference = !showReference;
     refToggleBtn.classList.toggle('on', showReference);
-    refToggleBtn.textContent = showReference ? '🖼 参考画像を隠す' : '🖼 参考画像を表示';
     updateReferenceLayer();
   });
+
+  // ---------------- 行/列の挿入(サイズは変えない) ----------------
+  function setInsertMode(mode){
+    insertMode = mode;
+    addRowBtn.classList.toggle('on', mode === 'row');
+    addColBtn.classList.toggle('on', mode === 'col');
+    if(mode === 'row'){
+      insertHint.textContent = '行を挿入する位置のマスをタップ(もう一度「行+」でキャンセル)';
+      insertHint.hidden = false;
+    } else if(mode === 'col'){
+      insertHint.textContent = '列を挿入する位置のマスをタップ(もう一度「列+」でキャンセル)';
+      insertHint.hidden = false;
+    } else {
+      insertHint.hidden = true;
+    }
+  }
+
+  addRowBtn.addEventListener('click', ()=>{
+    if(!editImageData) return;
+    setInsertMode(insertMode === 'row' ? null : 'row');
+  });
+  addColBtn.addEventListener('click', ()=>{
+    if(!editImageData) return;
+    setInsertMode(insertMode === 'col' ? null : 'col');
+  });
+
+  // 行を1行、buffer座標 bufferRow の位置に挿入(透明)。currentH/currentWは
+  // 変わらない -- バッファ下端の行が1つ分押し出されて消える。
+  function insertRowAt(rowIndex){
+    if(!bufferImageData) return;
+    undoStack.push(takeSnapshot());
+    if(undoStack.length > 50) undoStack.shift();
+    redoStack = [];
+    undoBtn.disabled = false;
+    redoBtn.disabled = true;
+
+    const bw = bufferImageData.width, bh = bufferImageData.height;
+    const bd = bufferImageData.data;
+    const bufferRow = viewOffsetY + rowIndex;
+    for(let y = bh - 1; y > bufferRow; y--){
+      const dst = y * bw * 4;
+      const src = (y - 1) * bw * 4;
+      bd.copyWithin(dst, src, src + bw * 4);
+    }
+    const rowStart = bufferRow * bw * 4;
+    bd.fill(0, rowStart, rowStart + bw * 4);
+
+    editImageData = extractWindow(bufferImageData, viewOffsetX, viewOffsetY, currentW, currentH);
+    drawScaledImage(outCanvas, editImageData, currentZoom);
+    updateReferenceLayer();
+    showStatus('行を挿入しました', false);
+  }
+
+  // insertRowAtと同じ考え方で、列を1列(透明)挿入する。
+  function insertColAt(colIndex){
+    if(!bufferImageData) return;
+    undoStack.push(takeSnapshot());
+    if(undoStack.length > 50) undoStack.shift();
+    redoStack = [];
+    undoBtn.disabled = false;
+    redoBtn.disabled = true;
+
+    const bw = bufferImageData.width, bh = bufferImageData.height;
+    const bd = bufferImageData.data;
+    const bufferCol = viewOffsetX + colIndex;
+    for(let y = 0; y < bh; y++){
+      const rowStart = y * bw * 4;
+      for(let x = bw - 1; x > bufferCol; x--){
+        const dst = rowStart + x * 4;
+        const src = rowStart + (x - 1) * 4;
+        bd.copyWithin(dst, src, src + 4);
+      }
+      const cell = rowStart + bufferCol * 4;
+      bd.fill(0, cell, cell + 4);
+    }
+
+    editImageData = extractWindow(bufferImageData, viewOffsetX, viewOffsetY, currentW, currentH);
+    drawScaledImage(outCanvas, editImageData, currentZoom);
+    updateReferenceLayer();
+    showStatus('列を挿入しました', false);
+  }
+
+  // insertMode武装中にキャンバスをタップした時の処理。挿入を実行して武装解除する。
+  function handleInsertTap(e){
+    const { px, py } = canvasToPixel(e, outCanvas, currentZoom);
+    if(px < 0 || py < 0 || px >= currentW || py >= currentH){ setInsertMode(null); return; }
+    if(insertMode === 'row') insertRowAt(py);
+    else if(insertMode === 'col') insertColAt(px);
+    setInsertMode(null);
+  }
 
   function zoomFor(w, h){
     // fit within the same on-screen budget regardless of orientation --
@@ -965,6 +1074,7 @@
     undoBtn.disabled = true; redoBtn.disabled = true;
     downloadBtn.disabled = false;
     refToggleBtn.disabled = false;
+    addRowBtn.disabled = false; addColBtn.disabled = false;
     if(!brushColor && palette.length) brushColor = palette[0];
     renderBrushRow();
     statusLine.textContent = w + '×' + h + ' に変換しました(' + palette.length + '色)';
@@ -1079,7 +1189,10 @@
   }
 
   // mouse (desktop) -- unaffected by pinch/pan, no gesture ambiguity
-  outCanvas.addEventListener('mousedown', (e)=>{ beginStroke(e); });
+  outCanvas.addEventListener('mousedown', (e)=>{
+    if(insertMode){ handleInsertTap(e); return; }
+    beginStroke(e);
+  });
   outCanvas.addEventListener('mousemove', (e)=>{ if(isPainting) paintAt(e); });
   window.addEventListener('mouseup', ()=>{ isPainting = false; });
 
@@ -1099,6 +1212,7 @@
     } else if(e.touches.length === 1 && activeTouchMode !== 'pinch' && activeTouchMode !== 'shift'){
       if(!editImageData) return;
       e.preventDefault();
+      if(insertMode){ handleInsertTap(e); return; }
       activeTouchMode = 'paint';
       beginStroke(e);
     }
