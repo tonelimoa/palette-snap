@@ -69,6 +69,14 @@
     position: absolute; top:0; left:0; transform-origin: 0 0; cursor: crosshair;
   }
   #outTransformWrap canvas{ display:block; image-rendering: pixelated; }
+  /* all three layers are positioned absolutely at the same spot; with no
+     z-index set, DOM order alone decides the stack: pixel art (bottom) ->
+     reference, semi-transparent (middle) -> grid lines (top). The reference
+     sits ON TOP of the pixel art (not behind it) because the converted
+     artwork is fully opaque with no gaps -- a background layer would never
+     be visible through it. */
+  #outTransformWrap canvas.reflayer{ position:absolute; top:0; left:0; pointer-events:none; image-rendering:auto; }
+  #outTransformWrap canvas.pixellayer{ position:absolute; top:0; left:0; }
   #outTransformWrap canvas.overlay{ position:absolute; top:0; left:0; pointer-events:none; }
 
   .drop{
@@ -109,6 +117,7 @@
   }
   .gsbtn:hover{ border-color: var(--accent); color: var(--accent-2); }
   .gsbtn:disabled{ opacity:0.35; cursor:not-allowed; }
+  .gsbtn.on{ color:#1a0e05; background: var(--accent-2); border-color: var(--accent-2); }
   select#sizeSelect{
     height:32px; padding:0 10px; border:1px solid var(--line); background: var(--panel-2);
     color: var(--accent-2); font-weight:700; font-size:13px; border-radius:5px; cursor:pointer;
@@ -192,7 +201,8 @@
 
   <div class="canvasarea" id="editViewport">
     <div id="outTransformWrap">
-      <canvas id="cvOut"></canvas>
+      <canvas id="cvOut" class="pixellayer"></canvas>
+      <canvas id="cvRef" class="reflayer"></canvas>
       <canvas id="cvOutGrid" class="overlay"></canvas>
     </div>
 
@@ -222,6 +232,9 @@
           <option value="64x64">64×64</option>
           <option value="16x32">16×32(縦長)</option>
         </select>
+      </div>
+      <div class="sheet-row">
+        <button id="refToggleBtn" class="gsbtn" disabled>🖼 参考画像を表示</button>
       </div>
       <div class="candidate-grid" id="candidateGrid"></div>
       <div class="hint-line">1本指=塗る/2本指=ズーム・移動/3本指=絵全体を移動。候補色をタップでパレットに追加・削除できます(緑チェック=使用中)。</div>
@@ -257,6 +270,12 @@
   const BUFFER_MULT = 3; // buffer is 3x the visible size -> 1x margin on every side
   let candidateColors = []; // [{r,g,b,pct}]
   let palette = [];         // hex strings currently "added"
+
+  // ---- reference image overlay (semi-transparent guide on top of the pixel art) ----
+  // Sampled directly from loadedImage at full resolution each redraw -- see
+  // updateReferenceLayer() -- so no separate low-res buffer is kept for it.
+  let showReference = false;
+  const REFERENCE_OPACITY = 0.4;
   let brushColor = null;
   let eraserActive = false;
   let isPainting = false;
@@ -281,6 +300,7 @@
 
   const outCanvas = document.getElementById('cvOut');
   const outGridCanvas = document.getElementById('cvOutGrid');
+  const refCanvas = document.getElementById('cvRef');
   const editViewport = document.getElementById('editViewport');
   const outTransformWrap = document.getElementById('outTransformWrap');
   const dropZone = document.getElementById('drop');
@@ -293,6 +313,7 @@
   const paletteFileInput = document.getElementById('paletteFileInput');
   const candidateGrid = document.getElementById('candidateGrid');
   const sizeSelect = document.getElementById('sizeSelect');
+  const refToggleBtn = document.getElementById('refToggleBtn');
   const brushRowEl = document.getElementById('brushRow');
   const bottombarEl = document.getElementById('bottombar');
   const bottombarMsg = document.getElementById('bottombarMsg');
@@ -435,6 +456,48 @@
     viewOffsetY = snap.offsetY;
     editImageData = extractWindow(bufferImageData, viewOffsetX, viewOffsetY, currentW, currentH);
     drawScaledImage(outCanvas, editImageData, currentZoom);
+    updateReferenceLayer();
+  }
+
+  // Redraws the reference (background guide) layer, windowed to the same
+  // viewOffsetX/Y as the pixel data -- this is what keeps it in sync through
+  // zoom, pan, and the 3-finger "shift" gesture.
+  //
+  // Samples directly from the ORIGINAL loaded image every time, rather than
+  // from a copy pre-shrunk to the grid's own w x h -- a copy that small would
+  // just be a blurred version of the same crushed detail the grid already
+  // has, defeating the point of a reference. The buffer places the (stretched)
+  // source image at [currentW, 2*currentW) x [currentH, 2*currentH) in
+  // buffer-cell coordinates; that's a simple linear map back to the source
+  // image's own pixel coordinates, so we can always pull full-resolution
+  // pixels for whatever window is currently visible.
+  function updateReferenceLayer(){
+    const ctx = refCanvas.getContext('2d');
+    refCanvas.width = currentW * currentZoom;
+    refCanvas.height = currentH * currentZoom;
+    ctx.clearRect(0, 0, refCanvas.width, refCanvas.height);
+    if(!showReference || !loadedImage) return;
+
+    const contentX0 = currentW, contentY0 = currentH; // where the real content starts in buffer-space
+    const scaleX = loadedImage.width / currentW;
+    const scaleY = loadedImage.height / currentH;
+
+    // visible window (buffer-cell space) vs. the region that actually has source pixels
+    const winX0 = viewOffsetX, winY0 = viewOffsetY;
+    const winX1 = viewOffsetX + currentW, winY1 = viewOffsetY + currentH;
+    const ovX0 = Math.max(winX0, contentX0), ovY0 = Math.max(winY0, contentY0);
+    const ovX1 = Math.min(winX1, contentX0 + currentW), ovY1 = Math.min(winY1, contentY0 + currentH);
+    if(ovX1 <= ovX0 || ovY1 <= ovY0) return; // shifted entirely outside the original content
+
+    const sx = (ovX0 - contentX0) * scaleX, sy = (ovY0 - contentY0) * scaleY;
+    const sw = (ovX1 - ovX0) * scaleX, sh = (ovY1 - ovY0) * scaleY;
+    const dx = (ovX0 - winX0) * currentZoom, dy = (ovY0 - winY0) * currentZoom;
+    const dw = (ovX1 - ovX0) * currentZoom, dh = (ovY1 - ovY0) * currentZoom;
+
+    ctx.imageSmoothingEnabled = true; // the reference is a guide, not pixel art -- keep it smooth
+    ctx.globalAlpha = REFERENCE_OPACITY;
+    ctx.drawImage(loadedImage, sx, sy, sw, sh, dx, dy, dw, dh);
+    ctx.globalAlpha = 1;
   }
 
   // ---------------- pinch / pan (2-finger) ----------------
@@ -446,6 +509,8 @@
     const vpRect = editViewport.getBoundingClientRect();
     const contentW = currentW * currentZoom;
     const contentH = currentH * currentZoom;
+    outTransformWrap.style.width = contentW + 'px';
+    outTransformWrap.style.height = contentH + 'px';
     pinchScale = 1;
     panX = (vpRect.width - contentW) / 2;
     panY = (vpRect.height - contentH) / 2;
@@ -485,12 +550,30 @@
   }
 
   // ---------------- extraction ----------------
+  // Some source PNGs use magenta as a transparency "matte": pixels along the
+  // silhouette edge aren't cleanly alpha=0, they're a semi-transparent blend
+  // tinted toward magenta. Treated naively, that tint gets counted as real
+  // content and shows up as solid magenta speckles/edges in both the
+  // extracted palette and the per-cell dominant-color conversion below.
+  // isMagentaFringe() only ever flags non-fully-opaque pixels (a < 255), so a
+  // deliberate, fully opaque magenta color elsewhere in an image (e.g. an
+  // actual magenta background) is never mistaken for this artifact.
+  const CONTENT_ALPHA_THRESHOLD = 128;
+  function isMagentaFringe(r, g, b, a){
+    if(a >= 255) return false;
+    return g < r*0.6 && g < b*0.6 && Math.abs(r-b) < 40 && (r > 60 || b > 60);
+  }
+  function isRealContentPixel(r, g, b, a){
+    return a >= CONTENT_ALPHA_THRESHOLD && !isMagentaFringe(r, g, b, a);
+  }
+
   function extractDominantColors(imageData, maxColors){
     const freq = new Map();
     const d = imageData.data;
     for(let i=0;i<d.length;i+=4){
-      if(d[i+3] === 0) continue;
-      const key = d[i]+','+d[i+1]+','+d[i+2];
+      const r=d[i], g=d[i+1], b=d[i+2], a=d[i+3];
+      if(!isRealContentPixel(r,g,b,a)) continue;
+      const key = r+','+g+','+b;
       freq.set(key, (freq.get(key)||0)+1);
     }
     const sorted = [...freq.entries()].map(([k,c])=>{
@@ -647,11 +730,13 @@
 
         outCanvas.getContext('2d').clearRect(0,0,outCanvas.width,outCanvas.height);
         outGridCanvas.getContext('2d').clearRect(0,0,outGridCanvas.width,outGridCanvas.height);
+        refCanvas.getContext('2d').clearRect(0,0,refCanvas.width,refCanvas.height);
         editImageData = null;
         bufferImageData = null; bufferW = 0; bufferH = 0; viewOffsetX = 0; viewOffsetY = 0;
         undoStack = []; redoStack = [];
         undoBtn.disabled = true; redoBtn.disabled = true;
         downloadBtn.disabled = true;
+        refToggleBtn.disabled = true;
         statusLine.textContent = '抽出中...';
 
         extractBtn.disabled = false;
@@ -672,20 +757,107 @@
     convert(currentW, currentH);
   });
 
+  refToggleBtn.addEventListener('click', ()=>{
+    showReference = !showReference;
+    refToggleBtn.classList.toggle('on', showReference);
+    refToggleBtn.textContent = showReference ? '🖼 参考画像を隠す' : '🖼 参考画像を表示';
+    updateReferenceLayer();
+  });
+
   function zoomFor(w, h){
     // fit within the same on-screen budget regardless of orientation --
     // base the zoom on whichever dimension is larger
     return Math.max(4, Math.min(40, Math.round(384 / Math.max(w, h))));
   }
 
+  // For each output cell, look at every source pixel that falls inside that
+  // cell's region of the original image and use the most-frequent (mode)
+  // opaque color as that cell's color -- rather than picking a single
+  // (effectively random) sample point the way nearest-neighbor downscaling
+  // does. This is one pass over the source image's pixels, partitioned by
+  // cell, so it costs about the same as the initial color-extraction scan.
+  // A cell that's mostly transparent stays transparent.
+  // Cap how much source resolution we ever scan pixel-by-pixel. A photo can be
+  // several thousand px on a side; the per-cell mode calculation gets plenty
+  // of samples well below that, so this bounds worst-case time regardless of
+  // how large the upload is, without changing the result in any visible way.
+  const DOMINANT_SCAN_MAX_DIM = 1200;
+
+  function computeCellDominantColors(img, w, h){
+    let sw = img.width, sh = img.height;
+    const longSide = Math.max(sw, sh);
+    if(longSide > DOMINANT_SCAN_MAX_DIM){
+      const s = DOMINANT_SCAN_MAX_DIM / longSide;
+      sw = Math.max(1, Math.round(sw * s));
+      sh = Math.max(1, Math.round(sh * s));
+    }
+    const srcCanvas = document.createElement('canvas');
+    srcCanvas.width = sw; srcCanvas.height = sh;
+    const sctx = srcCanvas.getContext('2d');
+    sctx.imageSmoothingEnabled = true; // only matters if we downscaled above
+    sctx.drawImage(img, 0, 0, sw, sh);
+    const sd = sctx.getImageData(0, 0, sw, sh).data;
+
+    const out = new ImageData(w, h);
+    const od = out.data;
+    const scaleX = sw / w, scaleY = sh / h;
+    // Colors are grouped into coarse buckets before voting, so near-identical
+    // anti-aliased shades (which rarely repeat exactly) still cluster into one
+    // winning group instead of splitting the vote into noise. BUCKET_SHIFT=24
+    // (matches the >>> below via division) groups each channel into ~11 steps.
+    const BUCKET = 24;
+    // key -> {count, sumR, sumG, sumB} -- reused across cells to avoid per-cell allocation
+    const freq = new Map();
+
+    for(let cy = 0; cy < h; cy++){
+      const sy0 = Math.floor(cy * scaleY);
+      const sy1 = Math.min(sh, Math.max(sy0 + 1, Math.floor((cy + 1) * scaleY)));
+      for(let cx = 0; cx < w; cx++){
+        const sx0 = Math.floor(cx * scaleX);
+        const sx1 = Math.min(sw, Math.max(sx0 + 1, Math.floor((cx + 1) * scaleX)));
+
+        freq.clear();
+        let realCount = 0, totalCount = 0;
+        for(let sy = sy0; sy < sy1; sy++){
+          let idx = (sy * sw + sx0) * 4;
+          for(let sx = sx0; sx < sx1; sx++, idx += 4){
+            totalCount++;
+            const r = sd[idx], g = sd[idx+1], b = sd[idx+2], a = sd[idx+3];
+            if(!isRealContentPixel(r, g, b, a)) continue;
+            realCount++;
+            const key = ((r / BUCKET | 0) << 8) | ((g / BUCKET | 0) << 4) | (b / BUCKET | 0);
+            let bucket = freq.get(key);
+            if(bucket){ bucket.count++; bucket.sumR += r; bucket.sumG += g; bucket.sumB += b; }
+            else freq.set(key, { count: 1, sumR: r, sumG: g, sumB: b });
+          }
+        }
+
+        const outIdx = (cy * w + cx) * 4;
+        // A cell that's mostly translucent/edge-halo rather than real content
+        // (fewer than half its source pixels count as "real") is left
+        // transparent, rather than forcing a color out of a minority sliver.
+        if(realCount === 0 || realCount < totalCount / 2){
+          od[outIdx+3] = 0;
+        } else {
+          let bestCount = -1, bestBucket = null;
+          for(const bucket of freq.values()){
+            if(bucket.count > bestCount){ bestCount = bucket.count; bestBucket = bucket; }
+          }
+          // Output the actual average color of the winning bucket, not the
+          // bucket's quantized corner -- keeps the result true to the source.
+          od[outIdx]   = Math.round(bestBucket.sumR / bestBucket.count);
+          od[outIdx+1] = Math.round(bestBucket.sumG / bestBucket.count);
+          od[outIdx+2] = Math.round(bestBucket.sumB / bestBucket.count);
+          od[outIdx+3] = 255;
+        }
+      }
+    }
+    return out;
+  }
+
   function convert(w, h){
     if(!loadedImage || !palette.length) return;
-    const resized = document.createElement('canvas');
-    resized.width = w; resized.height = h;
-    const rctx = resized.getContext('2d');
-    rctx.imageSmoothingEnabled = false;
-    rctx.drawImage(loadedImage, 0, 0, w, h);
-    const raw = rctx.getImageData(0, 0, w, h);
+    const raw = computeCellDominantColors(loadedImage, w, h);
 
     const paletteRgb = palette.map(hexToRgb);
     const d = raw.data;
@@ -714,12 +886,14 @@
     currentZoom = zoomFor(w, h);
     drawScaledImage(outCanvas, editImageData, currentZoom);
     drawGrid(outGridCanvas, w, h, currentZoom);
+    updateReferenceLayer();
     dropZone.style.display = 'none';
     centerContent();
 
     undoStack = []; redoStack = [];
     undoBtn.disabled = true; redoBtn.disabled = true;
     downloadBtn.disabled = false;
+    refToggleBtn.disabled = false;
     if(!brushColor && palette.length) brushColor = palette[0];
     renderBrushRow();
     statusLine.textContent = w + '×' + h + ' に変換しました(' + palette.length + '色)';
@@ -921,6 +1095,7 @@
       viewOffsetY = clamp(shiftGesture.baseOffsetY - dy, 0, maxOffsetY);
       editImageData = extractWindow(bufferImageData, viewOffsetX, viewOffsetY, currentW, currentH);
       drawScaledImage(outCanvas, editImageData, currentZoom);
+      updateReferenceLayer();
       shiftGesture.appliedDX = dx; shiftGesture.appliedDY = dy;
     }
   }
