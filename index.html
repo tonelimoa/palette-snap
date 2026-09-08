@@ -1,4 +1,4 @@
-  <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
@@ -92,6 +92,9 @@
   .dropframe .big{ font-size: 34px; }
   .dropframe p{ margin:0; font-size:13px; color: var(--ink-dim); text-align:center; max-width:26ch; line-height:1.7; }
   .drop.drag .dropframe{ border-color: var(--accent); background: rgba(242,98,5,0.12); }
+  /* パレットが未設定(空)の間は画像の選択・D&Dを受け付けない */
+  .drop.locked{ cursor:not-allowed; }
+  .drop.locked .dropframe{ border-color: var(--line); background: rgba(28,26,58,0.35); opacity:0.7; }
 
   /* ---------------- slide-up sheets (settings / download fallback) ---------------- */
   .backdrop{
@@ -208,8 +211,8 @@
 
     <div class="drop" id="drop">
       <div class="dropframe">
-        <div class="big">📁</div>
-        <p>クリックまたはドラッグ&ドロップで画像を読み込み<br>→ 自動で15色抽出してドット絵に変換します</p>
+        <div class="big" id="dropIcon">📁</div>
+        <p id="dropText">クリックまたはドラッグ&ドロップで画像を読み込み<br>→ 設定したパレットの色に変換します</p>
       </div>
     </div>
 
@@ -218,6 +221,7 @@
     <div class="sheet" id="gearSheet" hidden>
       <div class="close-sheet" id="closeGearSheet">×</div>
       <h3>画像・抽出・サイズ</h3>
+      <div class="hint-line" style="opacity:0.5; margin-top:-6px;">build: 2026-09-08-bgkey-fix3</div>
       <div class="sheet-row">
         <button id="pickImageBtn" class="gsbtn">🖼 画像を開く</button>
         <span class="filename" id="filename">未選択</span>
@@ -238,7 +242,7 @@
       </div>
       <div class="candidate-grid" id="candidateGrid"></div>
       <div class="hint-line">1本指=塗る/2本指=ズーム・移動/3本指=絵全体を移動。候補色をタップでパレットに追加・削除できます(緑チェック=使用中)。</div>
-      <div class="status-line" id="statusLine">画像未読み込み</div>
+      <div class="status-line" id="statusLine">パレット未読み込み(先に📂で読み込んでください)</div>
     </div>
 
     <div class="sheet" id="fallbackSheet" hidden>
@@ -251,7 +255,7 @@
 
   <div class="bottombar" id="bottombar">
     <div class="paletterow" id="brushRow"></div>
-    <div class="bottombar-msg" id="bottombarMsg">画像を読み込むとここに色が並びます</div>
+    <div class="bottombar-msg" id="bottombarMsg">パレットを読み込むとここに色が並びます</div>
   </div>
 
   <input type="file" id="fileInput" accept="image/*">
@@ -270,6 +274,11 @@
   const BUFFER_MULT = 3; // buffer is 3x the visible size -> 1x margin on every side
   let candidateColors = []; // [{r,g,b,pct}]
   let palette = [];         // hex strings currently "added"
+
+  // Auto-detected "this color = background" key, from the loaded image's four
+  // corners (see detectBackgroundColor()). null when the corners don't agree
+  // closely enough to be confident, or there's no loaded image yet.
+  let bgKeyColor = null;
 
   // ---- reference image overlay (semi-transparent guide on top of the pixel art) ----
   // Sampled directly from loadedImage at full resolution each redraw -- see
@@ -304,6 +313,7 @@
   const editViewport = document.getElementById('editViewport');
   const outTransformWrap = document.getElementById('outTransformWrap');
   const dropZone = document.getElementById('drop');
+  const dropText = document.getElementById('dropText');
   const fileInput = document.getElementById('fileInput');
   const filenameEl = document.getElementById('filename');
   const extractBtn = document.getElementById('extractBtn');
@@ -563,7 +573,45 @@
     if(a >= 255) return false;
     return g < r*0.6 && g < b*0.6 && Math.abs(r-b) < 40 && (r > 60 || b > 60);
   }
+
+  // Formats with no real transparency (JPG) -- or a PNG whose "transparent"
+  // area was flattened to a solid matte color -- can't be caught by the alpha
+  // check above at all: the whole background is a single, fully opaque color.
+  // detectBackgroundColor() samples the four corners of the loaded image; if
+  // they closely agree, that color is treated as the background key and
+  // excluded from real content regardless of alpha. If the corners disagree
+  // (e.g. the subject touches a corner), detection backs off (returns null)
+  // rather than guessing.
+  const BG_CORNER_AGREE_DIST = 20;   // corners must be mutually within this to trust the sample
+  const BG_KEY_MATCH_DIST = 90;      // pixels within this distance of the key color are "background"
+  const BG_CORNER_MIN_ALPHA = 200;   // corners must be near-opaque, or this is just alpha=0 noise
+  function detectBackgroundColor(img){
+    const c = document.createElement('canvas');
+    c.width = img.width; c.height = img.height;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    const w = img.width, h = img.height;
+    const pts = [[0,0],[w-1,0],[0,h-1],[w-1,h-1]];
+    const corners = pts.map(([x,y]) => ctx.getImageData(x, y, 1, 1).data);
+    // If a corner is (near-)transparent, its stored RGB is meaningless noise,
+    // not a deliberate color -- and the image already has real alpha
+    // transparency there, so this whole color-key mechanism isn't needed.
+    if(corners.some(c => c[3] < BG_CORNER_MIN_ALPHA)) return null;
+    for(let i=1;i<corners.length;i++){
+      const dr=corners[i][0]-corners[0][0], dg=corners[i][1]-corners[0][1], db=corners[i][2]-corners[0][2];
+      if(Math.sqrt(dr*dr+dg*dg+db*db) > BG_CORNER_AGREE_DIST) return null; // corners disagree -- don't guess
+    }
+    const avg = [0,1,2].map(ch => Math.round(corners.reduce((s,c)=>s+c[ch],0)/4));
+    return { r: avg[0], g: avg[1], b: avg[2] };
+  }
+  function isBackgroundKeyColor(r, g, b){
+    if(!bgKeyColor) return false;
+    const dr=r-bgKeyColor.r, dg=g-bgKeyColor.g, db=b-bgKeyColor.b;
+    return (dr*dr+dg*dg+db*db) <= BG_KEY_MATCH_DIST*BG_KEY_MATCH_DIST;
+  }
+
   function isRealContentPixel(r, g, b, a){
+    if(isBackgroundKeyColor(r, g, b)) return false; // checked regardless of alpha -- catches fully opaque mattes (JPG, flattened PNG)
     return a >= CONTENT_ALPHA_THRESHOLD && !isMagentaFringe(r, g, b, a);
   }
 
@@ -611,7 +659,9 @@
     const raw = tctx.getImageData(0,0,tmp.width,tmp.height);
 
     candidateColors = extractDominantColors(raw, 15);
-    palette = candidateColors.map(c => rgbToHex(c.r,c.g,c.b));
+    // パレットは既に(txt読み込みで)確定している前提のため、ここでは上書き
+    // しない。候補色は「参考表示・タップで任意追加/削除」用のみに使う。
+    // 実際の変換(パレットの色への最近傍マッチ)は convert() が行う。
     renderCandidateGrid();
     renderBrushRow();
     updateSizeSelectEnabled();
@@ -628,6 +678,7 @@
     renderCandidateGrid();
     renderBrushRow();
     updateSizeSelectEnabled();
+    updateImageGate();
     maybeReconvert();
     showStatus('パレットを読み込みました(' + palette.length + '色)', false);
   }
@@ -685,6 +736,7 @@
         renderCandidateGrid();
         renderBrushRow();
         updateSizeSelectEnabled();
+        updateImageGate();
         maybeReconvert();
       });
       candidateGrid.appendChild(item);
@@ -707,12 +759,30 @@
 
   // ---------------- file loading ----------------
   dropZone.addEventListener('click', ()=> fileInput.click());
-  pickImageBtn.addEventListener('click', ()=> fileInput.click());
-  dropZone.addEventListener('dragover', (e)=>{ e.preventDefault(); dropZone.classList.add('drag'); });
+  // ---------------- palette-first gate ----------------
+  // パレットが1色も設定されていない間は、画像の選択・D&Dを一切受け付けない。
+  // 「まずパレットを読み込む」→「そのパレットの色で画像を変換する」という
+  // 順番を強制するための入口。パレットが確定した時点(loadPaletteBtn経由)で
+  // 初めて画像読み込みが解禁される。
+  function updateImageGate(){
+    const locked = palette.length === 0;
+    pickImageBtn.disabled = locked;
+    dropZone.classList.toggle('locked', locked);
+    dropText.innerHTML = locked
+      ? '先にパレットを読み込んでください<br>(上の📂ボタンからpalette.txtを読み込み)'
+      : 'クリックまたはドラッグ&ドロップで画像を読み込み<br>→ 設定したパレットの色に変換します';
+  }
+
+  pickImageBtn.addEventListener('click', ()=>{ if(palette.length) fileInput.click(); });
+  dropZone.addEventListener('dragover', (e)=>{
+    if(!palette.length) return;
+    e.preventDefault(); dropZone.classList.add('drag');
+  });
   dropZone.addEventListener('dragleave', ()=> dropZone.classList.remove('drag'));
   dropZone.addEventListener('drop', (e)=>{
     e.preventDefault();
     dropZone.classList.remove('drag');
+    if(!palette.length) return;
     if(e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
   });
   fileInput.addEventListener('change', (e)=>{
@@ -727,6 +797,7 @@
       const img = new Image();
       img.onload = ()=>{
         loadedImage = img;
+        bgKeyColor = detectBackgroundColor(img);
 
         outCanvas.getContext('2d').clearRect(0,0,outCanvas.width,outCanvas.height);
         outGridCanvas.getContext('2d').clearRect(0,0,outGridCanvas.width,outGridCanvas.height);
@@ -741,7 +812,7 @@
 
         extractBtn.disabled = false;
         runExtract();
-        statusLine.textContent = '色を抽出して変換しました';
+        statusLine.textContent = '設定したパレットの色で変換しました';
         dropZone.style.display = 'none';
       };
       img.src = ev.target.result;
@@ -1179,6 +1250,7 @@
   });
 
   renderBrushRow();
+  updateImageGate();
 })();
 </script>
 </body>
