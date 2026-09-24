@@ -134,6 +134,24 @@
     color: var(--accent-2); font-weight:700; font-size:13px; border-radius:5px; cursor:pointer;
   }
   select#sizeSelect:disabled{ opacity:0.35; cursor:not-allowed; color: var(--ink); }
+  /* 自由サイズ入力(W×H)+ −/+ ステッパー */
+  .stepper{ display:flex; align-items:center; border:1px solid var(--line); border-radius:5px; overflow:hidden; }
+  .stepper button{
+    width:32px; height:32px; border:none; background: var(--panel-2); color: var(--ink);
+    font-size:16px; cursor:pointer; flex-shrink:0;
+  }
+  .stepper button:active{ background: var(--line); }
+  .stepper input{
+    width:52px; height:32px; border:none; border-left:1px solid var(--line); border-right:1px solid var(--line);
+    background: var(--bg); color: var(--accent-2); font-family:inherit; font-weight:700; font-size:14px;
+    text-align:center; -moz-appearance:textfield;
+  }
+  .stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
+  .stepper.disabled{ opacity:0.35; pointer-events:none; }
+  .seg{ display:flex; }
+  .seg .gsbtn{ border-radius:0; margin-left:-1px; padding:0 10px; }
+  .seg .gsbtn:first-child{ border-radius:5px 0 0 5px; margin-left:0; }
+  .seg .gsbtn:last-child{ border-radius:0 5px 5px 0; }
   .filename{ font-size:10px; color: var(--ink-dim); word-break: break-all; }
 
   .candidate-grid{ display:flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
@@ -234,22 +252,58 @@
     <div class="sheet" id="gearSheet" hidden>
       <div class="close-sheet" id="closeGearSheet">×</div>
       <h3>画像・抽出・サイズ</h3>
-      <div class="hint-line" style="opacity:0.5; margin-top:-6px;">build: 2026-09-08-bgkey-fix3</div>
+      <div class="hint-line" style="opacity:0.5; margin-top:-6px;">build: 2026-09-24-freesize</div>
       <div class="sheet-row">
         <button id="pickImageBtn" class="gsbtn">🖼 画像を開く</button>
         <span class="filename" id="filename">未選択</span>
       </div>
       <div class="sheet-row">
         <button id="extractBtn" class="gsbtn" disabled>🎨 抽出しなおす</button>
+      </div>
+      <div class="sheet-row">
         <span class="lbl">サイズ</span>
+        <div class="stepper disabled" id="stepperW">
+          <button type="button" data-dim="w" data-dir="-1">−</button>
+          <input id="sizeW" type="number" inputmode="numeric" min="1" max="256" value="32" aria-label="幅(px)">
+          <button type="button" data-dim="w" data-dir="1">+</button>
+        </div>
+        <span>×</span>
+        <div class="stepper disabled" id="stepperH">
+          <button type="button" data-dim="h" data-dir="-1">−</button>
+          <input id="sizeH" type="number" inputmode="numeric" min="1" max="256" value="32" aria-label="高さ(px)">
+          <button type="button" data-dim="h" data-dir="1">+</button>
+        </div>
+      </div>
+      <div class="sheet-row">
+        <span class="lbl">刻み</span>
+        <div class="seg" id="stepSeg">
+          <button type="button" class="gsbtn" data-step="1">1</button>
+          <button type="button" class="gsbtn" data-step="8">8</button>
+          <button type="button" class="gsbtn" data-step="16">16</button>
+        </div>
+        <button type="button" id="aspectLockBtn" class="gsbtn" title="幅を変えると元画像の縦横比で高さも変える">🔒 縦横比</button>
+      </div>
+      <div class="sheet-row">
+        <span class="lbl">プリセット</span>
         <select id="sizeSelect" disabled>
+          <option value="">カスタム</option>
           <option value="8x8">8×8</option>
           <option value="16x16">16×16</option>
           <option value="32x32" selected>32×32</option>
           <option value="64x64">64×64</option>
           <option value="16x32">16×32(縦長)</option>
           <option value="32x48">32×48(縦長)</option>
+          <option value="96x80">96×80(民家 6×5マス)</option>
+          <option value="144x160">144×160(大社 9×10マス)</option>
         </select>
+      </div>
+      <div class="sheet-row">
+        <span class="lbl">太線</span>
+        <div class="seg" id="majorSeg">
+          <button type="button" class="gsbtn" data-major="8">8px</button>
+          <button type="button" class="gsbtn" data-major="16">16px</button>
+        </div>
+        <span class="filename" id="sizeInfo"></span>
       </div>
       <div class="candidate-grid" id="candidateGrid"></div>
       <div class="hint-line">1本指=塗る/2本指=ズーム・移動/3本指=絵全体を移動。候補色をタップでパレットに追加・削除できます(緑チェック=使用中)。</div>
@@ -407,6 +461,9 @@
     ctx.drawImage(tmp, 0, 0, w, h, 0, 0, w*zoom, h*zoom);
   }
 
+  // 太線の間隔(8=SNESのハードウェアタイル、16=メタタイル/1マス)
+  let gridMajor = 8;
+
   function drawGrid(canvas, w, h, zoom){
     canvas.width = w * zoom;
     canvas.height = h * zoom;
@@ -420,12 +477,12 @@
     ctx.lineWidth = 1;
     ctx.beginPath();
     for(let x=0; x<=w; x++){
-      if(x % 8 === 0) continue;
+      if(x % gridMajor === 0) continue;
       ctx.moveTo(x*zoom + 0.5, 0);
       ctx.lineTo(x*zoom + 0.5, h*zoom);
     }
     for(let y=0; y<=h; y++){
-      if(y % 8 === 0) continue;
+      if(y % gridMajor === 0) continue;
       ctx.moveTo(0, y*zoom + 0.5);
       ctx.lineTo(w*zoom, y*zoom + 0.5);
     }
@@ -435,11 +492,11 @@
     ctx.strokeStyle = 'rgba(205,196,232,0.8)';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    for(let x=0; x<=w; x+=8){
+    for(let x=0; x<=w; x+=gridMajor){
       ctx.moveTo(x*zoom, 0);
       ctx.lineTo(x*zoom, h*zoom);
     }
-    for(let y=0; y<=h; y+=8){
+    for(let y=0; y<=h; y+=gridMajor){
       ctx.moveTo(0, y*zoom);
       ctx.lineTo(w*zoom, y*zoom);
     }
@@ -765,6 +822,8 @@
   function updateSizeSelectEnabled(){
     const ok = !!loadedImage && palette.length > 0;
     sizeSelect.disabled = !ok;
+    document.getElementById('stepperW').classList.toggle('disabled', !ok);
+    document.getElementById('stepperH').classList.toggle('disabled', !ok);
   }
 
   // Convert automatically whenever the image/palette state can support it --
@@ -817,6 +876,11 @@
       img.onload = ()=>{
         loadedImage = img;
         bgKeyColor = detectBackgroundColor(img);
+        // 縦横比ロック中は、新しい画像の縦横比に高さを合わせてから変換する
+        if(aspectLock){
+          [currentW, currentH] = sizeFrom('w', currentW);
+          syncSizeUI(); savePrefs();
+        }
 
         outCanvas.getContext('2d').clearRect(0,0,outCanvas.width,outCanvas.height);
         outGridCanvas.getContext('2d').clearRect(0,0,outGridCanvas.width,outGridCanvas.height);
@@ -842,11 +906,122 @@
   }
 
   // ---------------- size -> convert ----------------
-  // select values are "WxH" (e.g. "32x32", "16x32") so non-square grids work the same way
-  sizeSelect.addEventListener('change', ()=>{
-    const [w, h] = sizeSelect.value.split('x').map(n => parseInt(n, 10));
+  // 幅×高さは自由入力(1〜SIZE_MAX px)。−/+ は「刻み」(1/8/16px)単位で
+  // その倍数にスナップしながら増減する。縦横比ロック中は幅/高さの片方を
+  // 変えると、元画像の縦横比でもう片方も追従する。プリセットは値を入れる
+  // だけのショートカットで、今のサイズに一致するものが無ければ「カスタム」。
+  const SIZE_MIN = 1, SIZE_MAX = 256;
+  const sizeWInput = document.getElementById('sizeW');
+  const sizeHInput = document.getElementById('sizeH');
+  const aspectLockBtn = document.getElementById('aspectLockBtn');
+  const sizeInfo = document.getElementById('sizeInfo');
+  let sizeStep = 16;
+  let aspectLock = false;
+
+  // 前回の設定を覚えておく(ブラウザ毎の便利機能。使えなくても動作する)
+  function loadPrefs(){
+    try{
+      const p = JSON.parse(localStorage.getItem('paletteSnapSize') || 'null');
+      if(p){
+        if(p.w && p.h){ currentW = clamp(p.w|0, SIZE_MIN, SIZE_MAX); currentH = clamp(p.h|0, SIZE_MIN, SIZE_MAX); }
+        if([1,8,16].includes(p.step)) sizeStep = p.step;
+        if([8,16].includes(p.major)) gridMajor = p.major;
+        aspectLock = !!p.lock;
+      }
+    } catch(e){}
+  }
+  function savePrefs(){
+    try{
+      localStorage.setItem('paletteSnapSize', JSON.stringify({w: currentW, h: currentH, step: sizeStep, major: gridMajor, lock: aspectLock}));
+    } catch(e){}
+  }
+
+  function sourceAspect(){
+    return loadedImage ? loadedImage.width / loadedImage.height : 1;
+  }
+
+  function syncSizeUI(){
+    sizeWInput.value = currentW;
+    sizeHInput.value = currentH;
+    const key = currentW + 'x' + currentH;
+    const match = Array.from(sizeSelect.options).some(o => o.value === key);
+    sizeSelect.value = match ? key : '';
+    document.querySelectorAll('#stepSeg .gsbtn').forEach(b => b.classList.toggle('on', +b.dataset.step === sizeStep));
+    document.querySelectorAll('#majorSeg .gsbtn').forEach(b => b.classList.toggle('on', +b.dataset.major === gridMajor));
+    aspectLockBtn.classList.toggle('on', aspectLock);
+    const cells = (currentW % 16 === 0 && currentH % 16 === 0)
+      ? ' = ' + (currentW/16) + '×' + (currentH/16) + 'マス(16px)'
+      : (currentW % 8 === 0 && currentH % 8 === 0) ? ' = ' + (currentW/8) + '×' + (currentH/8) + 'タイル(8px)' : '';
+    sizeInfo.textContent = currentW + '×' + currentH + 'px' + cells;
+  }
+
+  // 実際にサイズを変える唯一の入口。変換済みの絵に手を入れている場合は、
+  // 作り直すと編集が消えるので確認する。
+  function applySize(w, h){
+    w = clamp(Math.round(w) || SIZE_MIN, SIZE_MIN, SIZE_MAX);
+    h = clamp(Math.round(h) || SIZE_MIN, SIZE_MIN, SIZE_MAX);
+    if(w === currentW && h === currentH && editImageData){ syncSizeUI(); return; }
+    if(undoStack.length > 0 && !window.confirm(w + '×' + h + ' で変換しなおします。今の手直しは消えますがよいですか?')){
+      syncSizeUI(); return;
+    }
     currentW = w; currentH = h;
-    convert(currentW, currentH);
+    syncSizeUI();
+    savePrefs();
+    if(loadedImage && palette.length) convert(currentW, currentH);
+  }
+
+  // 片方を変えたとき、ロック中ならもう片方を縦横比から決める(刻みにスナップ)
+  function sizeFrom(dim, value){
+    let w = currentW, h = currentH;
+    if(dim === 'w') w = value; else h = value;
+    if(aspectLock){
+      const step = sizeStep;
+      if(dim === 'w') h = Math.max(step, Math.round(w / sourceAspect() / step) * step);
+      else w = Math.max(step, Math.round(h * sourceAspect() / step) * step);
+    }
+    return [w, h];
+  }
+
+  function stepValue(v, dir){
+    const step = sizeStep;
+    // 刻みの倍数にスナップしながら1段階動かす(例: 刻み16で 90 → + → 96)
+    const next = dir > 0 ? Math.floor(v / step) * step + step : Math.ceil(v / step) * step - step;
+    return clamp(next, step > 1 ? step : SIZE_MIN, SIZE_MAX);
+  }
+
+  document.querySelectorAll('.stepper button').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const dim = btn.dataset.dim, dir = +btn.dataset.dir;
+      const v = stepValue(dim === 'w' ? currentW : currentH, dir);
+      applySize(...sizeFrom(dim, v));
+    });
+  });
+  [[sizeWInput, 'w'], [sizeHInput, 'h']].forEach(([input, dim])=>{
+    input.addEventListener('change', ()=>{
+      const v = parseInt(input.value, 10);
+      if(!v){ syncSizeUI(); return; }
+      applySize(...sizeFrom(dim, v));
+    });
+    input.addEventListener('keydown', (e)=>{ if(e.key === 'Enter') input.blur(); });
+  });
+  document.querySelectorAll('#stepSeg .gsbtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ sizeStep = +btn.dataset.step; syncSizeUI(); savePrefs(); });
+  });
+  document.querySelectorAll('#majorSeg .gsbtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      gridMajor = +btn.dataset.major; syncSizeUI(); savePrefs();
+      if(editImageData) drawGrid(outGridCanvas, currentW, currentH, currentZoom);
+    });
+  });
+  aspectLockBtn.addEventListener('click', ()=>{
+    aspectLock = !aspectLock;
+    syncSizeUI(); savePrefs();
+    if(aspectLock && loadedImage) applySize(...sizeFrom('w', currentW));
+  });
+  sizeSelect.addEventListener('change', ()=>{
+    if(!sizeSelect.value){ syncSizeUI(); return; }
+    const [w, h] = sizeSelect.value.split('x').map(n => parseInt(n, 10));
+    applySize(w, h);
   });
 
   refToggleBtn.addEventListener('click', ()=>{
@@ -1364,6 +1539,8 @@
     if(editImageData) centerContent();
   });
 
+  loadPrefs();
+  syncSizeUI();
   renderBrushRow();
   updateImageGate();
 })();
