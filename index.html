@@ -750,6 +750,13 @@
   }
   function isBackgroundKeyColor(r, g, b){
     if(!bgKeyColor) return false;
+    // 読み込み済みパレットに、背景候補の色と(ほぼ)同じ色があるなら、それは
+    // 背景ではなく絵の一部(単品アイコンの地面など)として扱う。
+    for(const hx of palette){
+      const q = hexToRgb(hx);
+      const er=q[0]-bgKeyColor.r, eg=q[1]-bgKeyColor.g, eb=q[2]-bgKeyColor.b;
+      if(er*er+eg*eg+eb*eb <= 36) return false;
+    }
     const dr=r-bgKeyColor.r, dg=g-bgKeyColor.g, db=b-bgKeyColor.b;
     return (dr*dr+dg*dg+db*db) <= BG_KEY_MATCH_DIST*BG_KEY_MATCH_DIST;
   }
