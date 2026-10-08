@@ -264,13 +264,13 @@
         <span class="lbl">サイズ</span>
         <div class="stepper disabled" id="stepperW">
           <button type="button" data-dim="w" data-dir="-1">−</button>
-          <input id="sizeW" type="number" inputmode="numeric" min="1" max="256" value="32" aria-label="幅(px)">
+          <input id="sizeW" type="number" inputmode="numeric" min="1" max="512" value="32" aria-label="幅(px)">
           <button type="button" data-dim="w" data-dir="1">+</button>
         </div>
         <span>×</span>
         <div class="stepper disabled" id="stepperH">
           <button type="button" data-dim="h" data-dir="-1">−</button>
-          <input id="sizeH" type="number" inputmode="numeric" min="1" max="256" value="32" aria-label="高さ(px)">
+          <input id="sizeH" type="number" inputmode="numeric" min="1" max="512" value="32" aria-label="高さ(px)">
           <button type="button" data-dim="h" data-dir="1">+</button>
         </div>
       </div>
@@ -985,7 +985,7 @@
   // その倍数にスナップしながら増減する。縦横比ロック中は幅/高さの片方を
   // 変えると、元画像の縦横比でもう片方も追従する。プリセットは値を入れる
   // だけのショートカットで、今のサイズに一致するものが無ければ「カスタム」。
-  const SIZE_MIN = 1, SIZE_MAX = 256;
+  const SIZE_MIN = 1, SIZE_MAX = 512;
   const sizeWInput = document.getElementById('sizeW');
   const sizeHInput = document.getElementById('sizeH');
   const aspectLockBtn = document.getElementById('aspectLockBtn');
