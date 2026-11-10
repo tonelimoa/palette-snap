@@ -43,12 +43,20 @@
     padding: 0 10px; padding-top: env(safe-area-inset-top, 0px);
     background: var(--panel); border-bottom:1px solid var(--line);
     position:relative; z-index: 30;
-    overflow-x:auto; -webkit-overflow-scrolling:touch;
+    overflow:hidden;   /* 横スライドなし(ボタンが収まるように詰めてある) */
   }
   .ibtn.small-label{ font-size:12px; font-weight:700; }
-  .grp{ display:flex; gap:7px; }
+  .grp{ display:flex; gap:5px; align-items:center; }
+  /* 行/列の ＋ ＝ 上段、− ＝ 下段に、同じ位置にまとめる(行+ 列+ / 行− 列−) */
+  .pmchooser{ position:absolute; top:calc(54px + env(safe-area-inset-top, 0px)); right:10px; z-index:60; display:flex; align-items:center; gap:6px;
+    background: var(--panel); border:1px solid var(--accent-2); border-radius:8px; padding:6px 8px; box-shadow:0 4px 14px rgba(0,0,0,.45); color:var(--ink); font-size:13px; font-weight:700; }
+  .pmchooser[hidden]{ display:none; }
+  .pmbtn{ height:36px; padding:0 12px; border:1px solid var(--line); background:var(--panel-2); color:var(--ink); border-radius:6px; font-size:14px; font-weight:700; cursor:pointer; }
+  .pmbtn:active{ background: var(--accent-2); color:#1a0e05; }
+  .rcgrid{ display:grid; grid-template-columns:repeat(2,31px); grid-auto-rows:22px; gap:2px; flex-shrink:0; }
+  .rcgrid .ibtn{ width:31px; height:22px; font-size:11px; border-radius:4px; padding:0; }
   .ibtn{
-    width:36px; height:36px; border:1px solid var(--line); background:var(--panel-2);
+    width:34px; height:36px; border:1px solid var(--line); background:var(--panel-2);
     color:var(--ink); display:flex; align-items:center; justify-content:center; font-size:16px;
     cursor:pointer; border-radius:5px; flex-shrink:0;
   }
@@ -223,12 +231,25 @@
     <div class="grp">
       <button id="gearBtn" class="ibtn" title="画像・抽出・サイズ">⚙</button>
       <button id="refToggleBtn" class="ibtn" title="参考画像を表示/非表示" disabled>🖼</button>
-      <button id="addRowBtn" class="ibtn small-label" title="タップした位置に透明な行を1行挿入" disabled>行+</button>
-      <button id="addColBtn" class="ibtn small-label" title="タップした位置に透明な列を1列挿入" disabled>列+</button>
+      <button id="rowBtn" class="ibtn small-label" title="行を足す/消す(押すと＋−を選べます)" disabled>行</button>
+      <button id="colBtn" class="ibtn small-label" title="列を足す/消す(押すと＋−を選べます)" disabled>列</button>
+      <div hidden>
+      
+        <button id="addRowBtn" class="ibtn small-label" title="タップした位置に透明な行を1行挿入" disabled>行+</button>
+        <button id="addColBtn" class="ibtn small-label" title="タップした位置に透明な列を1列挿入" disabled>列+</button>
+        <button id="delRowBtn" class="ibtn small-label" title="消したい行の範囲を2回タップ(最初の行→最後の行)。下の行が詰まり、一番下に透明な行が出ます" disabled>行−</button>
+        <button id="delColBtn" class="ibtn small-label" title="消したい列の範囲を2回タップ(最初の列→最後の列)。右の列が詰まり、一番右に透明な列が出ます" disabled>列−</button>
+      </div>
       <button id="savePaletteBtn" class="ibtn accent" title="パレットを保存">💾</button>
       <button id="loadPaletteBtn" class="ibtn accent" title="パレットを読み込み">📂</button>
       <button id="downloadBtn" class="ibtn accent" title="PNGをダウンロード" disabled>⬇</button>
     </div>
+  </div>
+
+  <div class="pmchooser" id="pmChooser" hidden>
+    <span id="pmLabel">行</span>
+    <button type="button" class="pmbtn" id="pmPlus">＋ 足す</button>
+    <button type="button" class="pmbtn" id="pmMinus">− 消す</button>
   </div>
 
   <div class="canvasarea" id="editViewport">
@@ -366,7 +387,7 @@
   // 透明な行/列を挿入する。サイズ(currentW/currentH)は変えず、バッファの
   // 反対側の端が1つ分押し出されて消える(バッファはBUFFER_MULT倍の余白を
   // 持っているため、実際に切り捨てられることは通常ない)。
-  let insertMode = null; // null | 'row' | 'col'
+  let insertMode = null; // null | 'row' | 'col' | 'delrow' | 'delcol'
   const MIN_SCALE = 0.5, MAX_SCALE = 8;
 
   // 1本指で描画を始めた直後に2本目/3本目の指が触れた場合、それが誤って打った
@@ -396,6 +417,13 @@
   const refToggleBtn = document.getElementById('refToggleBtn');
   const addRowBtn = document.getElementById('addRowBtn');
   const addColBtn = document.getElementById('addColBtn');
+  const delRowBtn = document.getElementById('delRowBtn');
+  const delColBtn = document.getElementById('delColBtn');
+  const rowBtn = document.getElementById('rowBtn'), colBtn = document.getElementById('colBtn');
+  const pmChooser = document.getElementById('pmChooser'), pmLabel = document.getElementById('pmLabel');
+  let pmKind = null;   // 'row' | 'col' (＋−を選ぶ待ち)
+  let delColStart = null;
+  let delRowStart = null;   // 「行−」で最初にタップした行(buffer内ではなく表示上のy)
   const insertHint = document.getElementById('insertHint');
   const brushRowEl = document.getElementById('brushRow');
   const bottombarEl = document.getElementById('bottombar');
@@ -966,7 +994,7 @@
         undoBtn.disabled = true; redoBtn.disabled = true;
         downloadBtn.disabled = true;
         refToggleBtn.disabled = true;
-        addRowBtn.disabled = true; addColBtn.disabled = true;
+        addRowBtn.disabled = true; addColBtn.disabled = true; delRowBtn.disabled = true; delColBtn.disabled = true; rowBtn.disabled = true; colBtn.disabled = true;
         setInsertMode(null);
         statusLine.textContent = '抽出中...';
 
@@ -1110,17 +1138,41 @@
     insertMode = mode;
     addRowBtn.classList.toggle('on', mode === 'row');
     addColBtn.classList.toggle('on', mode === 'col');
+    delRowBtn.classList.toggle('on', mode === 'delrow');
+    delColBtn.classList.toggle('on', mode === 'delcol');
+    rowBtn.classList.toggle('on', mode === 'row' || mode === 'delrow');
+    colBtn.classList.toggle('on', mode === 'col' || mode === 'delcol');
+    pmChooser.hidden = true; pmKind = null;
+    delRowStart = null; delColStart = null;
     if(mode === 'row'){
-      insertHint.textContent = '行を挿入する位置のマスをタップ(もう一度「行+」でキャンセル)';
+      insertHint.textContent = '行を挿入する位置のマスをタップ(もう一度「行」でキャンセル)';
       insertHint.hidden = false;
     } else if(mode === 'col'){
-      insertHint.textContent = '列を挿入する位置のマスをタップ(もう一度「列+」でキャンセル)';
+      insertHint.textContent = '列を挿入する位置のマスをタップ(もう一度「列」でキャンセル)';
+      insertHint.hidden = false;
+    } else if(mode === 'delcol'){
+      insertHint.textContent = '消す最初の列をタップ(もう一度「列」でキャンセル)';
+      insertHint.hidden = false;
+    } else if(mode === 'delrow'){
+      insertHint.textContent = '消す最初の行をタップ(もう一度「行」でキャンセル)';
       insertHint.hidden = false;
     } else {
       insertHint.hidden = true;
     }
   }
 
+  function openPM(kind){
+    if(!editImageData) return;
+    const armed = (kind === 'row') ? (insertMode === 'row' || insertMode === 'delrow') : (insertMode === 'col' || insertMode === 'delcol');
+    if(armed || pmKind === kind){ setInsertMode(null); return; }   // もう一度押すとキャンセル
+    setInsertMode(null);
+    pmKind = kind; pmLabel.textContent = (kind === 'row' ? '行' : '列');
+    pmChooser.hidden = false;
+  }
+  rowBtn.addEventListener('click', ()=> openPM('row'));
+  colBtn.addEventListener('click', ()=> openPM('col'));
+  document.getElementById('pmPlus').addEventListener('click', ()=>{ const k = pmKind; if(k) setInsertMode(k); });
+  document.getElementById('pmMinus').addEventListener('click', ()=>{ const k = pmKind; if(k) setInsertMode(k === 'row' ? 'delrow' : 'delcol'); });
   addRowBtn.addEventListener('click', ()=>{
     if(!editImageData) return;
     setInsertMode(insertMode === 'row' ? null : 'row');
@@ -1129,6 +1181,63 @@
     if(!editImageData) return;
     setInsertMode(insertMode === 'col' ? null : 'col');
   });
+  delColBtn.addEventListener('click', ()=>{
+    if(!editImageData) return;
+    setInsertMode(insertMode === 'delcol' ? null : 'delcol');
+  });
+  delRowBtn.addEventListener('click', ()=>{
+    if(!editImageData) return;
+    setInsertMode(insertMode === 'delrow' ? null : 'delrow');
+  });
+
+  // 列を a〜b(表示上のx, 0始まり, 両端を含む)消す。右の列が左に詰まり、一番右に透明な列が出る(サイズは変えない)。
+  function deleteColsAt(a, b){
+    if(!bufferImageData) return;
+    if(a > b){ const t = a; a = b; b = t; }
+    undoStack.push(takeSnapshot());
+    if(undoStack.length > 50) undoStack.shift();
+    redoStack = [];
+    undoBtn.disabled = false;
+    redoBtn.disabled = true;
+
+    const bw = bufferImageData.width, bh = bufferImageData.height;
+    const bd = bufferImageData.data;
+    const c0 = viewOffsetX + a, c1 = viewOffsetX + b;
+    const n = c1 - c0 + 1;
+    for(let y = 0; y < bh; y++){
+      const rowStart = y * bw * 4;
+      bd.copyWithin(rowStart + c0 * 4, rowStart + (c1 + 1) * 4, rowStart + bw * 4);   // 右の列を左へ詰める
+      bd.fill(0, rowStart + (bw - n) * 4, rowStart + bw * 4);                            // 右端の n 列は透明
+    }
+
+    editImageData = extractWindow(bufferImageData, viewOffsetX, viewOffsetY, currentW, currentH);
+    drawScaledImage(outCanvas, editImageData, currentZoom);
+    updateReferenceLayer();
+    showStatus(n + '列(x=' + a + '〜' + b + ')を消しました。画像の一番右に透明な列が' + n + '列できています(必要なら幅を' + n + '減らす)', false);
+  }
+
+  // 行を a〜b(表示上のy, 0始まり, 両端を含む)消す。下の行が上に詰まり、一番下に透明な行が出る(サイズは変えない)。
+  function deleteRowsAt(a, b){
+    if(!bufferImageData) return;
+    if(a > b){ const t = a; a = b; b = t; }
+    undoStack.push(takeSnapshot());
+    if(undoStack.length > 50) undoStack.shift();
+    redoStack = [];
+    undoBtn.disabled = false;
+    redoBtn.disabled = true;
+
+    const bw = bufferImageData.width, bh = bufferImageData.height;
+    const bd = bufferImageData.data;
+    const r0 = viewOffsetY + a, r1 = viewOffsetY + b;
+    const n = r1 - r0 + 1;
+    bd.copyWithin(r0 * bw * 4, (r1 + 1) * bw * 4, bh * bw * 4);   // 下の行を上へ詰める
+    bd.fill(0, (bh - n) * bw * 4, bh * bw * 4);                    // 末尾の n 行は透明
+
+    editImageData = extractWindow(bufferImageData, viewOffsetX, viewOffsetY, currentW, currentH);
+    drawScaledImage(outCanvas, editImageData, currentZoom);
+    updateReferenceLayer();
+    showStatus(n + '行(y=' + a + '〜' + b + ')を消しました。画像の一番下に透明な行が' + n + '行できています(必要なら高さを' + n + '減らす)', false);
+  }
 
   // 行を1行、buffer座標 bufferRow の位置に挿入(透明)。currentH/currentWは
   // 変わらない -- バッファ下端の行が1つ分押し出されて消える。
@@ -1190,6 +1299,28 @@
   function handleInsertTap(e){
     const { px, py } = canvasToPixel(e, outCanvas, currentZoom);
     if(px < 0 || py < 0 || px >= currentW || py >= currentH){ setInsertMode(null); return; }
+    if(insertMode === 'delcol'){
+      if(delColStart === null){
+        delColStart = px;
+        insertHint.textContent = '最初の列 x=' + px + '(左から' + (px + 1) + '列目)。消す最後の列をタップ(1列だけなら同じ列をもう一度)';
+        return;
+      }
+      const a = delColStart;
+      setInsertMode(null);
+      deleteColsAt(a, px);
+      return;
+    }
+    if(insertMode === 'delrow'){
+      if(delRowStart === null){
+        delRowStart = py;
+        insertHint.textContent = '最初の行 y=' + py + '(上から' + (py + 1) + '行目)。消す最後の行をタップ(1行だけなら同じ行をもう一度)';
+        return;   // まだ解除しない
+      }
+      const a = delRowStart;
+      setInsertMode(null);
+      deleteRowsAt(a, py);
+      return;
+    }
     if(insertMode === 'row') insertRowAt(py);
     else if(insertMode === 'col') insertColAt(px);
     setInsertMode(null);
@@ -1325,7 +1456,7 @@
     undoBtn.disabled = true; redoBtn.disabled = true;
     downloadBtn.disabled = false;
     refToggleBtn.disabled = false;
-    addRowBtn.disabled = false; addColBtn.disabled = false;
+    addRowBtn.disabled = false; addColBtn.disabled = false; delRowBtn.disabled = false; delColBtn.disabled = false; rowBtn.disabled = false; colBtn.disabled = false;
     if(!brushColor && palette.length) brushColor = palette[0];
     renderBrushRow();
     statusLine.textContent = w + '×' + h + ' に変換しました(' + palette.length + '色)';
