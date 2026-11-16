@@ -237,6 +237,7 @@
   }
   #selBox[hidden]{ display:none; }
   #selBox.masked{ border:none; outline:none; background:none; }
+  #selBar .ibtn[hidden]{ display:none; }
   #selBox canvas{ display:block; image-rendering:pixelated; }
 
   input[type=file]{ display:none; }
@@ -279,6 +280,7 @@
       <canvas id="cvRef" class="reflayer"></canvas>
       <canvas id="cvOutGrid" class="overlay"></canvas>
       <div id="selBox" hidden></div>
+      <canvas id="selPtsCv" class="overlay"></canvas>
     </div>
 
     <div class="drop" id="drop">
@@ -295,7 +297,9 @@
       <button id="selCopyBtn" class="ibtn" title="選択範囲をコピー">コピー</button>
       <button id="selCutBtn" class="ibtn" title="コピーして消す">切取</button>
       <button id="selPasteBtn" class="ibtn" title="コピーした絵を貼る(貼った後、中をドラッグして位置を決める)">貼付</button>
-      <button id="selShapeBtn" class="ibtn" title="選び方: 自由(ドラッグで囲む=多角形)/四角">自由</button>
+      <button id="selOkBtn" class="ibtn" title="打った点を結んで範囲を確定" hidden>確定</button>
+      <button id="selPtUndoBtn" class="ibtn" title="最後の点を取り消す" hidden>点↶</button>
+      <button id="selShapeBtn" class="ibtn" title="選び方: 自由(ドラッグで囲む)/点(1マスずつタップして多角形)/四角">自由</button>
       <button id="selAllBtn" class="ibtn" title="画面全体を選択">全体</button>
       <button id="selClearBtn" class="ibtn" title="選択を外す">解除</button>
     </div>
@@ -1537,6 +1541,9 @@
   let selFloat = null;     // 移動/貼付中の絵 {w, h, data, base:ImageData(その絵を除いたバッファ), bx, by}
   let selShape = 'free';   // 'free' = ドラッグで囲んだ多角形 / 'rect' = 四角
   const selShapeBtn = document.getElementById('selShapeBtn');
+  let polyPts = [];        // 「点」モードで打った頂点(表示上のマス座標、マスの中心)
+  const selOkBtn = document.getElementById('selOkBtn'), selPtUndoBtn = document.getElementById('selPtUndoBtn');
+  const selPtsCv = document.getElementById('selPtsCv');
   let selDrag = null;      // {kind:'new'|'move', sx, sy, ...}
   let selHintOn = false;
   const selToggleBtn = document.getElementById('selToggleBtn');
@@ -1558,7 +1565,26 @@
     drawScaledImage(outCanvas, editImageData, currentZoom);
     updateReferenceLayer();
   }
+  function drawPolyPts(){
+    const z = currentZoom;
+    if(!selMode || !polyPts.length || !editImageData){ selPtsCv.width = 1; selPtsCv.height = 1; return; }
+    selPtsCv.width = currentW * z; selPtsCv.height = currentH * z;
+    const g = selPtsCv.getContext('2d');
+    g.clearRect(0, 0, selPtsCv.width, selPtsCv.height);
+    g.lineWidth = Math.max(1, z / 6);
+    g.strokeStyle = '#fff'; g.setLineDash([]);
+    g.beginPath();
+    polyPts.forEach((q, i) => { if(i) g.lineTo(q.x * z, q.y * z); else g.moveTo(q.x * z, q.y * z); });
+    if(polyPts.length > 2) g.closePath();
+    g.stroke();
+    polyPts.forEach((q, i) => {
+      g.beginPath(); g.arc(q.x * z, q.y * z, Math.max(3, z * 0.45), 0, Math.PI * 2);
+      g.fillStyle = i === 0 ? '#f7a708' : '#ff3b6b'; g.fill();
+      g.strokeStyle = '#000'; g.lineWidth = 1; g.stroke();
+    });
+  }
   function updateSelBox(){
+    drawPolyPts();
     if(!selMode || !sel || !editImageData){ selBox.hidden = true; return; }
     selBox.hidden = false;
     selBox.style.left = ((sel.bx - viewOffsetX) * currentZoom) + 'px';
@@ -1594,6 +1620,9 @@
     selDelBtn.disabled = !has; selCopyBtn.disabled = !has; selCutBtn.disabled = !has;
     selClearBtn.disabled = !has;
     selPasteBtn.disabled = !selClip;
+    const building = selMode && selShape === 'dots' && polyPts.length > 0;
+    selOkBtn.hidden = !building; selPtUndoBtn.hidden = !building;
+    selOkBtn.disabled = polyPts.length < 2;
   }
   function setSel(next){
     sel = next;
@@ -1602,6 +1631,14 @@
     if(selMode) selHint();
   }
   function selHint(){
+    if(selShape === 'dots' && polyPts.length){
+      insertHint.textContent = polyPts.length + '点。次の点をタップ / 「確定」で閉じる / 同じ点をもう一度タップで削除';
+      insertHint.hidden = false; selHintOn = true; return;
+    }
+    if(selShape === 'dots' && !sel){
+      insertHint.textContent = '範囲の角になる点を1つずつタップ(もう一度「範囲」でやめる)';
+      insertHint.hidden = false; selHintOn = true; return;
+    }
     insertHint.textContent = sel
       ? '選択中(' + sel.w + '×' + sel.h + ')。中をドラッグで移動 / 外をタップで解除'
       : (selShape === 'free' ? 'ドラッグでぐるっと囲む(離すと閉じる)。' : 'ドラッグで四角を選ぶ。') + 'もう一度「範囲」でやめる';
@@ -1613,7 +1650,7 @@
     selMode = on;
     selToggleBtn.classList.toggle('on', on);
     selBar.hidden = !on;
-    selDrag = null; selFloat = null;
+    selDrag = null; selFloat = null; polyPts = [];
     if(!on){
       sel = null;
       if(selHintOn){ insertHint.hidden = true; selHintOn = false; }
@@ -1707,18 +1744,35 @@
   selCopyBtn.addEventListener('click', selCopy);
   selCutBtn.addEventListener('click', selCut);
   selPasteBtn.addEventListener('click', selPaste);
-  selAllBtn.addEventListener('click', ()=>{ if(editImageData){ selFloat = null; setSel({ bx: viewOffsetX, by: viewOffsetY, w: currentW, h: currentH }); } });
+  selAllBtn.addEventListener('click', ()=>{ if(editImageData){ selFloat = null; polyPts = []; setSel({ bx: viewOffsetX, by: viewOffsetY, w: currentW, h: currentH }); } });
+  function polySelFromPts(){
+    if(polyPts.length >= 3) return lassoSel(polyPts);
+    return null;
+  }
+  selOkBtn.addEventListener('click', ()=>{
+    if(polyPts.length < 2) return;
+    // 2点なら線分(通ったマス)、3点以上は多角形
+    const m = lassoSel(polyPts);
+    polyPts = [];
+    setSel(m);
+  });
+  selPtUndoBtn.addEventListener('click', ()=>{
+    polyPts.pop();
+    setSel(polySelFromPts());
+  });
   selShapeBtn.addEventListener('click', ()=>{
-    selShape = selShape === 'free' ? 'rect' : 'free';
-    selShapeBtn.textContent = selShape === 'free' ? '自由' : '四角';
+    selShape = selShape === 'free' ? 'dots' : (selShape === 'dots' ? 'rect' : 'free');
+    selShapeBtn.textContent = selShape === 'free' ? '自由' : (selShape === 'dots' ? '点' : '四角');
+    polyPts = [];
+    updateSelBox(); updateSelButtons();
     if(selMode) selHint();
   });
-  selClearBtn.addEventListener('click', ()=>{ selFloat = null; setSel(null); });
+  selClearBtn.addEventListener('click', ()=>{ selFloat = null; polyPts = []; setSel(null); });
   window.addEventListener('keydown', (e)=>{
     if(!selMode || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || '')) return;
     const mod = e.ctrlKey || e.metaKey;
     if(e.key === 'Delete' || e.key === 'Backspace'){ selDelete(); e.preventDefault(); }
-    else if(e.key === 'Escape'){ selFloat = null; setSel(null); }
+    else if(e.key === 'Escape'){ selFloat = null; polyPts = []; setSel(null); }
     else if(mod && (e.key === 'c' || e.key === 'C')){ selCopy(); e.preventDefault(); }
     else if(mod && (e.key === 'x' || e.key === 'X')){ selCut(); e.preventDefault(); }
     else if(mod && (e.key === 'v' || e.key === 'V')){ selPaste(); e.preventDefault(); }
@@ -1754,7 +1808,7 @@
       }
     }
     for(let i = 0; i < pts.length; i++){   // 線が通ったマス(細い囲みでも1マス以上選べるように)
-      const a = pts[i], b = pts[Math.max(0, i - 1)];
+      const a = pts[i], b = pts[(i + pts.length - 1) % pts.length];
       const n = Math.max(1, Math.ceil(Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) * 2));
       for(let k = 0; k <= n; k++){
         const qx = Math.floor(b.x + (a.x - b.x) * k / n), qy = Math.floor(b.y + (a.y - b.y) * k / n);
@@ -1769,6 +1823,16 @@
     if(!bufferImageData) return;
     const { px, py } = canvasToPixel(e, outCanvas, currentZoom);
     const bxp = viewOffsetX + px, byp = viewOffsetY + py;
+    if(selShape === 'dots' && (polyPts.length || !(sel && bxp >= sel.bx && bxp < sel.bx + sel.w && byp >= sel.by && byp < sel.by + sel.h &&
+        (!sel.mask || sel.mask[(byp - sel.by) * sel.w + (bxp - sel.bx)])))){
+      // 点モード: タップした1マスの中心を頂点に足す(同じ点をもう一度タップで削除)
+      if(!polyPts.length){ selFloat = null; sel = null; }
+      const qx = clamp(px, 0, currentW - 1) + 0.5, qy = clamp(py, 0, currentH - 1) + 0.5;
+      const k = polyPts.findIndex(q => q.x === qx && q.y === qy);
+      if(k >= 0) polyPts.splice(k, 1); else polyPts.push({ x: qx, y: qy });
+      setSel(polySelFromPts());
+      return;
+    }
     const inside = sel && bxp >= sel.bx && bxp < sel.bx + sel.w && byp >= sel.by && byp < sel.by + sel.h &&
       (!sel.mask || sel.mask[(byp - sel.by) * sel.w + (bxp - sel.bx)]);
     if(inside){
