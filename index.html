@@ -297,6 +297,7 @@
       <button id="selCopyBtn" class="ibtn" title="選択範囲をコピー">コピー</button>
       <button id="selCutBtn" class="ibtn" title="コピーして消す">切取</button>
       <button id="selPasteBtn" class="ibtn" title="コピーした絵を貼る(貼った後、中をドラッグして位置を決める)">貼付</button>
+      <button id="selPlaceBtn" class="ibtn" title="貼った絵をこの位置に置く(確定)" hidden>置く</button>
       <button id="selOkBtn" class="ibtn" title="打った点を結んで範囲を確定" hidden>確定</button>
       <button id="selPtUndoBtn" class="ibtn" title="最後の点を取り消す" hidden>点↶</button>
       <button id="selShapeBtn" class="ibtn" title="選び方: 自由(ドラッグで囲む)/点(1マスずつタップして多角形)/四角">自由</button>
@@ -1544,6 +1545,7 @@
   let polyPts = [];        // 「点」モードで打った頂点(表示上のマス座標、マスの中心)
   const selOkBtn = document.getElementById('selOkBtn'), selPtUndoBtn = document.getElementById('selPtUndoBtn');
   const selPtsCv = document.getElementById('selPtsCv');
+  const selPlaceBtn = document.getElementById('selPlaceBtn');
   let selDrag = null;      // {kind:'new'|'move', sx, sy, ...}
   let selHintOn = false;
   const selToggleBtn = document.getElementById('selToggleBtn');
@@ -1630,6 +1632,7 @@
     selPasteBtn.disabled = !selClip;
     const building = selMode && selShape === 'dots' && polyPts.length > 0;
     selOkBtn.hidden = !building; selPtUndoBtn.hidden = !building;
+    selPlaceBtn.hidden = !(selMode && selFloat && selFloat.pasting);
     selOkBtn.disabled = polyPts.length < 2;
   }
   function setSel(next){
@@ -1639,6 +1642,10 @@
     if(selMode) selHint();
   }
   function selHint(){
+    if(selFloat && selFloat.pasting){
+      insertHint.textContent = '貼付中: 置きたいマスをタップ(中心になる)/ドラッグで動かす → 「置く」で確定';
+      insertHint.hidden = false; selHintOn = true; return;
+    }
     if(selShape === 'dots' && polyPts.length){
       insertHint.textContent = polyPts.length + '点。次の点をタップ / 「確定」で閉じる / 同じ点をもう一度タップで削除';
       insertHint.hidden = false; selHintOn = true; return;
@@ -1741,13 +1748,15 @@
   }
   function selPaste(){
     if(!selClip || !bufferImageData) return;
+    polyPts = [];
     pushUndo();
     const bx = sel ? sel.bx : viewOffsetX, by = sel ? sel.by : viewOffsetY;
-    selFloat = { w: selClip.w, h: selClip.h, data: selClip.data, mask: selClip.mask, base: cloneImageData(bufferImageData), bx, by };
+    selFloat = { w: selClip.w, h: selClip.h, data: selClip.data, mask: selClip.mask, base: cloneImageData(bufferImageData), bx, by, pasting: true };
     renderFloat();
     setSel({ bx, by, w: selClip.w, h: selClip.h, mask: selClip.mask });
-    showStatus('貼りました。選択の中をドラッグして位置を決めてください', false);
+    showStatus('貼りました。置きたいマスをタップ(その位置が中心)/ドラッグで移動 → 「置く」で確定', false);
   }
+  selPlaceBtn.addEventListener('click', ()=>{ selFloat = null; setSel(null); showStatus('置きました', false); });
   selDelBtn.addEventListener('click', selDelete);
   selCopyBtn.addEventListener('click', selCopy);
   selCutBtn.addEventListener('click', selCut);
@@ -1830,6 +1839,11 @@
     if(!bufferImageData) return;
     const { px, py } = canvasToPixel(e, outCanvas, currentZoom);
     const bxp = viewOffsetX + px, byp = viewOffsetY + py;
+    if(selFloat && selFloat.pasting){
+      // 貼付中: 画面のどこでも操作できる(ドラッグ=動かす / タップ=そのマスが中心になる位置へ)
+      selDrag = { kind: 'pmove', px, py, fx: selFloat.bx, fy: selFloat.by, moved: false };
+      return;
+    }
     if(selShape === 'dots' && (polyPts.length || !(sel && bxp >= sel.bx && bxp < sel.bx + sel.w && byp >= sel.by && byp < sel.by + sel.h &&
         (!sel.mask || sel.mask[(byp - sel.by) * sel.w + (bxp - sel.bx)])))){
       // 点モード: タップした1マスの中心を頂点に足す(同じ点をもう一度タップで削除)
@@ -1868,6 +1882,14 @@
     } else {
       const dx = px - selDrag.px, dy = py - selDrag.py;
       if(dx || dy) selDrag.moved = true;
+      if(selDrag.kind === 'pmove'){
+        const nx = selDrag.fx + dx, ny = selDrag.fy + dy;
+        if(nx === selFloat.bx && ny === selFloat.by) return;
+        selFloat.bx = nx; selFloat.by = ny;
+        renderFloat();
+        setSel({ bx: nx, by: ny, w: selFloat.w, h: selFloat.h, mask: selFloat.mask });
+        return;
+      }
       const nx = selDrag.fx + dx, ny = selDrag.fy + dy;
       if(!selFloat){
         if(!dx && !dy) return;
@@ -1884,7 +1906,15 @@
       setSel({ bx: nx, by: ny, w: selFloat.w, h: selFloat.h, mask: selFloat.mask });
     }
   }
-  function selPointerUp(){ selDrag = null; }
+  function selPointerUp(){
+    const d = selDrag; selDrag = null;
+    if(d && d.kind === 'pmove' && !d.moved && selFloat && selFloat.pasting){
+      selFloat.bx = viewOffsetX + d.px - Math.floor(selFloat.w / 2);
+      selFloat.by = viewOffsetY + d.py - Math.floor(selFloat.h / 2);
+      renderFloat();
+      setSel({ bx: selFloat.bx, by: selFloat.by, w: selFloat.w, h: selFloat.h, mask: selFloat.mask });
+    }
+  }
   window.addEventListener('mousemove', (e)=>{ if(selMode && selDrag) selPointerMove(e); });
   window.addEventListener('mouseup', ()=>{ selPointerUp(); });
 
@@ -2020,6 +2050,7 @@
 
   function endAllTouch(e){
     if(!e.touches || e.touches.length === 0){
+      if(selDrag) selPointerUp();
       activeTouchMode = null;
       selDrag = null;
       isPainting = false;
