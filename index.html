@@ -1566,22 +1566,30 @@
     updateReferenceLayer();
   }
   function drawPolyPts(){
-    const z = currentZoom;
-    if(!selMode || !polyPts.length || !editImageData){ selPtsCv.width = 1; selPtsCv.height = 1; return; }
-    selPtsCv.width = currentW * z; selPtsCv.height = currentH * z;
-    const g = selPtsCv.getContext('2d');
-    g.clearRect(0, 0, selPtsCv.width, selPtsCv.height);
-    g.lineWidth = Math.max(1, z / 6);
-    g.strokeStyle = '#fff'; g.setLineDash([]);
-    g.beginPath();
-    polyPts.forEach((q, i) => { if(i) g.lineTo(q.x * z, q.y * z); else g.moveTo(q.x * z, q.y * z); });
-    if(polyPts.length > 2) g.closePath();
-    g.stroke();
-    polyPts.forEach((q, i) => {
-      g.beginPath(); g.arc(q.x * z, q.y * z, Math.max(3, z * 0.45), 0, Math.PI * 2);
-      g.fillStyle = i === 0 ? '#f7a708' : '#ff3b6b'; g.fill();
-      g.strokeStyle = '#000'; g.lineWidth = 1; g.stroke();
-    });
+    // 打った点の印は出さない(打ったマスは選択の色で見える)
+    selPtsCv.width = 1; selPtsCv.height = 1;
+  }
+  function opaqueOnly(r){
+    if(!r || !bufferImageData) return null;
+    const bw = bufferImageData.width, bh = bufferImageData.height, d = bufferImageData.data;
+    let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+    const m = new Uint8Array(r.w * r.h);
+    for(let y = 0; y < r.h; y++){
+      const by = r.by + y;
+      if(by < 0 || by >= bh) continue;
+      for(let x = 0; x < r.w; x++){
+        if(r.mask && !r.mask[y * r.w + x]) continue;
+        const bx = r.bx + x;
+        if(bx < 0 || bx >= bw) continue;
+        if(d[(by * bw + bx) * 4 + 3] === 0) continue;
+        m[y * r.w + x] = 1;
+        if(x < x0) x0 = x; if(x > x1) x1 = x; if(y < y0) y0 = y; if(y > y1) y1 = y;
+      }
+    }
+    if(x1 < 0) return null;
+    const w = x1 - x0 + 1, h = y1 - y0 + 1, mask = new Uint8Array(w * h);
+    for(let y = 0; y < h; y++) for(let x = 0; x < w; x++) mask[y * w + x] = m[(y0 + y) * r.w + (x0 + x)];
+    return { bx: r.bx + x0, by: r.by + y0, w, h, mask };
   }
   function updateSelBox(){
     drawPolyPts();
@@ -1744,10 +1752,9 @@
   selCopyBtn.addEventListener('click', selCopy);
   selCutBtn.addEventListener('click', selCut);
   selPasteBtn.addEventListener('click', selPaste);
-  selAllBtn.addEventListener('click', ()=>{ if(editImageData){ selFloat = null; polyPts = []; setSel({ bx: viewOffsetX, by: viewOffsetY, w: currentW, h: currentH }); } });
+  selAllBtn.addEventListener('click', ()=>{ if(editImageData){ selFloat = null; polyPts = []; setSel(opaqueOnly({ bx: viewOffsetX, by: viewOffsetY, w: currentW, h: currentH })); } });
   function polySelFromPts(){
-    if(polyPts.length >= 3) return lassoSel(polyPts);
-    return null;
+    return polyPts.length ? lassoSel(polyPts) : null;
   }
   selOkBtn.addEventListener('click', ()=>{
     if(polyPts.length < 2) return;
@@ -1815,7 +1822,7 @@
         if(qx >= x0 && qx <= x1 && qy >= y0 && qy <= y1) mask[(qy - y0) * w + (qx - x0)] = 1;
       }
     }
-    return { bx: viewOffsetX + x0, by: viewOffsetY + y0, w, h, mask };
+    return opaqueOnly({ bx: viewOffsetX + x0, by: viewOffsetY + y0, w, h, mask });
   }
 
   // ポインタ(マウス/1本指)操作
@@ -1856,7 +1863,7 @@
       } else {
         const x0 = Math.min(selDrag.px, cx), x1 = Math.max(selDrag.px, cx);
         const y0 = Math.min(selDrag.py, cy), y1 = Math.max(selDrag.py, cy);
-        setSel({ bx: viewOffsetX + x0, by: viewOffsetY + y0, w: x1 - x0 + 1, h: y1 - y0 + 1 });
+        setSel(opaqueOnly({ bx: viewOffsetX + x0, by: viewOffsetY + y0, w: x1 - x0 + 1, h: y1 - y0 + 1 }));
       }
     } else {
       const dx = px - selDrag.px, dy = py - selDrag.py;
