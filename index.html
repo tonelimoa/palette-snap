@@ -218,6 +218,25 @@
     font-size:11px; color: var(--ink-dim); pointer-events:none;
   }
 
+  /* ---------------- 範囲選択(削除/コピー/切取/貼付/移動) ---------------- */
+  #selToggleBtn{
+    position:absolute; top:8px; left:8px; z-index:12; width:auto; padding:0 10px;
+    font-size:12px; font-weight:700; background: rgba(28,26,58,0.92);
+  }
+  #selToggleBtn[hidden]{ display:none; }
+  #selBar{
+    position:absolute; left:50%; bottom:8px; transform:translateX(-50%); z-index:12;
+    display:flex; gap:5px; padding:6px; background: rgba(20,16,40,0.94);
+    border:1px solid var(--accent-2); border-radius:10px; box-shadow:0 4px 14px rgba(0,0,0,.45);
+  }
+  #selBar[hidden]{ display:none; }
+  #selBar .ibtn{ width:auto; min-width:44px; padding:0 8px; font-size:12px; font-weight:700; }
+  #selBox{
+    position:absolute; pointer-events:none; z-index:5;
+    border:2px dashed #fff; outline:1px dashed #000; background: rgba(247,167,8,0.12);
+  }
+  #selBox[hidden]{ display:none; }
+
   input[type=file]{ display:none; }
 </style>
 </head>
@@ -257,6 +276,7 @@
       <canvas id="cvOut" class="pixellayer"></canvas>
       <canvas id="cvRef" class="reflayer"></canvas>
       <canvas id="cvOutGrid" class="overlay"></canvas>
+      <div id="selBox" hidden></div>
     </div>
 
     <div class="drop" id="drop">
@@ -267,6 +287,15 @@
     </div>
 
     <div class="insert-hint" id="insertHint" hidden></div>
+    <button id="selToggleBtn" class="ibtn" title="範囲を選んで 削除/コピー/切取/貼付/移動" hidden>▭ 範囲</button>
+    <div id="selBar" hidden>
+      <button id="selDelBtn" class="ibtn" title="選択範囲を消す(透明に)">削除</button>
+      <button id="selCopyBtn" class="ibtn" title="選択範囲をコピー">コピー</button>
+      <button id="selCutBtn" class="ibtn" title="コピーして消す">切取</button>
+      <button id="selPasteBtn" class="ibtn" title="コピーした絵を貼る(貼った後、中をドラッグして位置を決める)">貼付</button>
+      <button id="selAllBtn" class="ibtn" title="画面全体を選択">全体</button>
+      <button id="selClearBtn" class="ibtn" title="選択を外す">解除</button>
+    </div>
 
     <div class="backdrop" id="backdrop" hidden></div>
 
@@ -487,6 +516,7 @@
     tmp.getContext('2d').putImageData(imageData, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(tmp, 0, 0, w, h, 0, 0, w*zoom, h*zoom);
+    if(canvas === outCanvas && typeof updateSelBox === 'function') updateSelBox();
   }
 
   // 太線の間隔(8=SNESのハードウェアタイル、16=メタタイル/1マス)
@@ -994,7 +1024,7 @@
         undoBtn.disabled = true; redoBtn.disabled = true;
         downloadBtn.disabled = true;
         refToggleBtn.disabled = true;
-        addRowBtn.disabled = true; addColBtn.disabled = true; delRowBtn.disabled = true; delColBtn.disabled = true; rowBtn.disabled = true; colBtn.disabled = true;
+        addRowBtn.disabled = true; addColBtn.disabled = true; delRowBtn.disabled = true; delColBtn.disabled = true; rowBtn.disabled = true; colBtn.disabled = true; selToggleBtn.hidden = true; if(selMode) setSelMode(false);
         setInsertMode(null);
         statusLine.textContent = '抽出中...';
 
@@ -1135,6 +1165,7 @@
 
   // ---------------- 行/列の挿入(サイズは変えない) ----------------
   function setInsertMode(mode){
+    if(mode && selMode) setSelMode(false);
     insertMode = mode;
     addRowBtn.classList.toggle('on', mode === 'row');
     addColBtn.classList.toggle('on', mode === 'col');
@@ -1456,7 +1487,7 @@
     undoBtn.disabled = true; redoBtn.disabled = true;
     downloadBtn.disabled = false;
     refToggleBtn.disabled = false;
-    addRowBtn.disabled = false; addColBtn.disabled = false; delRowBtn.disabled = false; delColBtn.disabled = false; rowBtn.disabled = false; colBtn.disabled = false;
+    addRowBtn.disabled = false; addColBtn.disabled = false; delRowBtn.disabled = false; delColBtn.disabled = false; rowBtn.disabled = false; colBtn.disabled = false; selToggleBtn.hidden = false; if(selMode) setSelMode(false);
     if(!brushColor && palette.length) brushColor = palette[0];
     renderBrushRow();
     statusLine.textContent = w + '×' + h + ' に変換しました(' + palette.length + '色)';
@@ -1491,6 +1522,215 @@
   }
 
   // ---------------- painting (shared by mouse + 1-finger touch) ----------------
+  // ---------------- 範囲選択 ----------------
+  // 「▭ 範囲」を押すと範囲選択モード(描画は止まる)。
+  //  ・ドラッグ(マウス/1本指)で四角を選ぶ。選択の外をタップすると解除。
+  //  ・選択の中をドラッグすると、中身ごと移動(元の場所は透明になる)。1回のドラッグ操作ごとに「戻す」で戻せる。
+  //  ・削除=透明化 / コピー / 切取 / 貼付(コピーした絵を選択位置に出し、中をドラッグして位置決め)/ 全体 / 解除。
+  // 選択はバッファ座標(bx,by,w,h)で持つので、3本指での移動やズームをしても位置がずれない。
+  let selMode = false;
+  let sel = null;          // {bx, by, w, h} | null
+  let selClip = null;      // {w, h, data} コピーした絵
+  let selFloat = null;     // 移動/貼付中の絵 {w, h, data, base:ImageData(その絵を除いたバッファ), bx, by}
+  let selDrag = null;      // {kind:'new'|'move', sx, sy, ...}
+  let selHintOn = false;
+  const selToggleBtn = document.getElementById('selToggleBtn');
+  const selBar = document.getElementById('selBar');
+  const selBox = document.getElementById('selBox');
+  const selDelBtn = document.getElementById('selDelBtn'), selCopyBtn = document.getElementById('selCopyBtn');
+  const selCutBtn = document.getElementById('selCutBtn'), selPasteBtn = document.getElementById('selPasteBtn');
+  const selAllBtn = document.getElementById('selAllBtn'), selClearBtn = document.getElementById('selClearBtn');
+
+  function pushUndo(){
+    undoStack.push(takeSnapshot());
+    if(undoStack.length > 50) undoStack.shift();
+    redoStack = [];
+    undoBtn.disabled = false;
+    redoBtn.disabled = true;
+  }
+  function refreshAfterBufferChange(){
+    editImageData = extractWindow(bufferImageData, viewOffsetX, viewOffsetY, currentW, currentH);
+    drawScaledImage(outCanvas, editImageData, currentZoom);
+    updateReferenceLayer();
+  }
+  function updateSelBox(){
+    if(!selMode || !sel || !editImageData){ selBox.hidden = true; return; }
+    selBox.hidden = false;
+    selBox.style.left = ((sel.bx - viewOffsetX) * currentZoom) + 'px';
+    selBox.style.top = ((sel.by - viewOffsetY) * currentZoom) + 'px';
+    selBox.style.width = (sel.w * currentZoom) + 'px';
+    selBox.style.height = (sel.h * currentZoom) + 'px';
+  }
+  function updateSelButtons(){
+    const has = !!sel;
+    selDelBtn.disabled = !has; selCopyBtn.disabled = !has; selCutBtn.disabled = !has;
+    selClearBtn.disabled = !has;
+    selPasteBtn.disabled = !selClip;
+  }
+  function setSel(next){
+    sel = next;
+    updateSelBox();
+    updateSelButtons();
+    if(selMode) selHint();
+  }
+  function selHint(){
+    insertHint.textContent = sel
+      ? '選択 ' + sel.w + '×' + sel.h + '。中をドラッグで移動 / 外をタップで解除'
+      : 'ドラッグで範囲を選択(もう一度「範囲」でやめる)';
+    insertHint.hidden = false; selHintOn = true;
+  }
+  function setSelMode(on){
+    if(on && !editImageData) return;
+    if(on) setInsertMode(null);
+    selMode = on;
+    selToggleBtn.classList.toggle('on', on);
+    selBar.hidden = !on;
+    selDrag = null; selFloat = null;
+    if(!on){
+      sel = null;
+      if(selHintOn){ insertHint.hidden = true; selHintOn = false; }
+    }
+    updateSelBox();
+    updateSelButtons();
+    if(on) selHint();
+  }
+  selToggleBtn.addEventListener('click', ()=> setSelMode(!selMode));
+
+  function clearRect(buf, r){
+    const bw = buf.width, bh = buf.height, d = buf.data;
+    for(let y = Math.max(0, r.by); y < Math.min(bh, r.by + r.h); y++){
+      const x0 = Math.max(0, r.bx), x1 = Math.min(bw, r.bx + r.w);
+      if(x1 > x0) d.fill(0, (y * bw + x0) * 4, (y * bw + x1) * 4);
+    }
+  }
+  function readRect(buf, r){
+    const out = new Uint8ClampedArray(r.w * r.h * 4);
+    const bw = buf.width, bh = buf.height, d = buf.data;
+    for(let y = 0; y < r.h; y++){
+      const sy = r.by + y;
+      if(sy < 0 || sy >= bh) continue;
+      for(let x = 0; x < r.w; x++){
+        const sx = r.bx + x;
+        if(sx < 0 || sx >= bw) continue;
+        const s = (sy * bw + sx) * 4, o = (y * r.w + x) * 4;
+        out[o] = d[s]; out[o+1] = d[s+1]; out[o+2] = d[s+2]; out[o+3] = d[s+3];
+      }
+    }
+    return out;
+  }
+  // 絵(data, w×h)を buf の (bx,by) に重ねる。透明な点は下の絵をそのまま残す。
+  function compositeInto(buf, data, w, h, bx, by){
+    const bw = buf.width, bh = buf.height, d = buf.data;
+    for(let y = 0; y < h; y++){
+      const dy = by + y;
+      if(dy < 0 || dy >= bh) continue;
+      for(let x = 0; x < w; x++){
+        const dx = bx + x;
+        if(dx < 0 || dx >= bw) continue;
+        const s = (y * w + x) * 4;
+        if(data[s+3] === 0) continue;
+        const o = (dy * bw + dx) * 4;
+        d[o] = data[s]; d[o+1] = data[s+1]; d[o+2] = data[s+2]; d[o+3] = data[s+3];
+      }
+    }
+  }
+  function renderFloat(){
+    bufferImageData.data.set(selFloat.base.data);
+    compositeInto(bufferImageData, selFloat.data, selFloat.w, selFloat.h, selFloat.bx, selFloat.by);
+    refreshAfterBufferChange();
+  }
+
+  function selDelete(){
+    if(!sel || !bufferImageData) return;
+    pushUndo(); selFloat = null;
+    clearRect(bufferImageData, sel);
+    refreshAfterBufferChange();
+    showStatus('選択範囲(' + sel.w + '×' + sel.h + ')を消しました', false);
+  }
+  function selCopy(){
+    if(!sel || !bufferImageData) return false;
+    selClip = { w: sel.w, h: sel.h, data: readRect(bufferImageData, sel) };
+    updateSelButtons();
+    showStatus('コピーしました(' + sel.w + '×' + sel.h + ')。「貼付」で貼れます', false);
+    return true;
+  }
+  function selCut(){
+    if(!selCopy()) return;
+    selDelete();
+    showStatus('切り取りました(' + selClip.w + '×' + selClip.h + ')。「貼付」で貼れます', false);
+  }
+  function selPaste(){
+    if(!selClip || !bufferImageData) return;
+    pushUndo();
+    const bx = sel ? sel.bx : viewOffsetX, by = sel ? sel.by : viewOffsetY;
+    selFloat = { w: selClip.w, h: selClip.h, data: selClip.data, base: cloneImageData(bufferImageData), bx, by };
+    renderFloat();
+    setSel({ bx, by, w: selClip.w, h: selClip.h });
+    showStatus('貼りました。選択の中をドラッグして位置を決めてください', false);
+  }
+  selDelBtn.addEventListener('click', selDelete);
+  selCopyBtn.addEventListener('click', selCopy);
+  selCutBtn.addEventListener('click', selCut);
+  selPasteBtn.addEventListener('click', selPaste);
+  selAllBtn.addEventListener('click', ()=>{ if(editImageData){ selFloat = null; setSel({ bx: viewOffsetX, by: viewOffsetY, w: currentW, h: currentH }); } });
+  selClearBtn.addEventListener('click', ()=>{ selFloat = null; setSel(null); });
+  window.addEventListener('keydown', (e)=>{
+    if(!selMode || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || '')) return;
+    const mod = e.ctrlKey || e.metaKey;
+    if(e.key === 'Delete' || e.key === 'Backspace'){ selDelete(); e.preventDefault(); }
+    else if(e.key === 'Escape'){ selFloat = null; setSel(null); }
+    else if(mod && (e.key === 'c' || e.key === 'C')){ selCopy(); e.preventDefault(); }
+    else if(mod && (e.key === 'x' || e.key === 'X')){ selCut(); e.preventDefault(); }
+    else if(mod && (e.key === 'v' || e.key === 'V')){ selPaste(); e.preventDefault(); }
+  });
+
+  // ポインタ(マウス/1本指)操作
+  function selPointerDown(e){
+    if(!bufferImageData) return;
+    const { px, py } = canvasToPixel(e, outCanvas, currentZoom);
+    const bxp = viewOffsetX + px, byp = viewOffsetY + py;
+    const inside = sel && bxp >= sel.bx && bxp < sel.bx + sel.w && byp >= sel.by && byp < sel.by + sel.h;
+    if(inside){
+      selDrag = { kind: 'move', px, py, fx: sel.bx, fy: sel.by, moved: false };
+    } else {
+      selFloat = null;
+      selDrag = { kind: 'new', px: clamp(px, 0, currentW - 1), py: clamp(py, 0, currentH - 1), moved: false };
+      setSel(null);
+    }
+  }
+  function selPointerMove(e){
+    if(!selDrag) return;
+    const { px, py } = canvasToPixel(e, outCanvas, currentZoom);
+    if(selDrag.kind === 'new'){
+      const cx = clamp(px, 0, currentW - 1), cy = clamp(py, 0, currentH - 1);
+      if(cx !== selDrag.px || cy !== selDrag.py) selDrag.moved = true;
+      if(!selDrag.moved) return;
+      const x0 = Math.min(selDrag.px, cx), x1 = Math.max(selDrag.px, cx);
+      const y0 = Math.min(selDrag.py, cy), y1 = Math.max(selDrag.py, cy);
+      setSel({ bx: viewOffsetX + x0, by: viewOffsetY + y0, w: x1 - x0 + 1, h: y1 - y0 + 1 });
+    } else {
+      const dx = px - selDrag.px, dy = py - selDrag.py;
+      if(dx || dy) selDrag.moved = true;
+      const nx = selDrag.fx + dx, ny = selDrag.fy + dy;
+      if(!selFloat){
+        if(!dx && !dy) return;
+        // 最初に動かした時に持ち上げる(元の場所は透明になる)
+        pushUndo();
+        const data = readRect(bufferImageData, sel);
+        const base = cloneImageData(bufferImageData);
+        clearRect(base, sel);
+        selFloat = { w: sel.w, h: sel.h, data, base, bx: sel.bx, by: sel.by };
+      }
+      if(nx === selFloat.bx && ny === selFloat.by) return;
+      selFloat.bx = nx; selFloat.by = ny;
+      renderFloat();
+      setSel({ bx: nx, by: ny, w: selFloat.w, h: selFloat.h });
+    }
+  }
+  function selPointerUp(){ selDrag = null; }
+  window.addEventListener('mousemove', (e)=>{ if(selMode && selDrag) selPointerMove(e); });
+  window.addEventListener('mouseup', ()=>{ selPointerUp(); });
+
   function canvasToPixel(e, canvas, zoom){
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
@@ -1574,6 +1814,7 @@
   outCanvas.addEventListener('mousedown', (e)=>{
     if(e.button !== 0) return; // right/middle button = pan, never paint
     if(insertMode){ handleInsertTap(e); return; }
+    if(selMode){ selPointerDown(e); return; }
     beginStroke(e);
   });
   outCanvas.addEventListener('mousemove', (e)=>{ if(isPainting) paintAt(e); });
@@ -1582,20 +1823,22 @@
   // touch: 1 finger = paint, 2 fingers = pinch-zoom + pan, 3 fingers = move the artwork itself
   editViewport.addEventListener('touchstart', (e)=>{
     if(!gearSheet.hidden || !fallbackSheet.hidden) return; // ignore canvas gestures while a sheet is open
+    if(e.target.closest && e.target.closest('.ibtn')) return; // 範囲ボタン/ツールバーのタップは描画にしない
     if(e.touches.length >= 3){
       e.preventDefault();
-      cancelAccidentalPaint();
+      cancelAccidentalPaint(); selDrag = null;
       activeTouchMode = 'shift';
       beginShiftGesture(e.touches);
     } else if(e.touches.length === 2 && activeTouchMode !== 'shift'){
       e.preventDefault();
-      cancelAccidentalPaint();
+      cancelAccidentalPaint(); selDrag = null;
       activeTouchMode = 'pinch';
       beginPinch(e.touches[0], e.touches[1]);
     } else if(e.touches.length === 1 && activeTouchMode !== 'pinch' && activeTouchMode !== 'shift'){
       if(!editImageData) return;
       e.preventDefault();
       if(insertMode){ handleInsertTap(e); return; }
+      if(selMode){ activeTouchMode = 'sel'; selPointerDown(e); return; }
       activeTouchMode = 'paint';
       beginStroke(e);
     }
@@ -1608,6 +1851,9 @@
     } else if(activeTouchMode === 'pinch' && e.touches.length >= 2){
       e.preventDefault();
       updatePinch(e.touches[0], e.touches[1]);
+    } else if(activeTouchMode === 'sel' && selDrag && e.touches.length === 1){
+      e.preventDefault();
+      selPointerMove(e);
     } else if(activeTouchMode === 'paint' && isPainting && e.touches.length === 1){
       e.preventDefault();
       paintMoved = true;
@@ -1618,6 +1864,7 @@
   function endAllTouch(e){
     if(!e.touches || e.touches.length === 0){
       activeTouchMode = null;
+      selDrag = null;
       isPainting = false;
       pinchGesture = null;
       shiftGesture = null;
@@ -1672,6 +1919,7 @@
     if(!undoStack.length || !bufferImageData) return;
     redoStack.push(takeSnapshot());
     const prev = undoStack.pop();
+    selFloat = null; if(sel) setSel(null);
     restoreSnapshot(prev);
     undoBtn.disabled = undoStack.length === 0;
     redoBtn.disabled = false;
@@ -1680,6 +1928,7 @@
     if(!redoStack.length || !bufferImageData) return;
     undoStack.push(takeSnapshot());
     const next = redoStack.pop();
+    selFloat = null; if(sel) setSel(null);
     restoreSnapshot(next);
     redoBtn.disabled = redoStack.length === 0;
     undoBtn.disabled = false;
